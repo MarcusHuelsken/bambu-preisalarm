@@ -1,102 +1,123 @@
-"""Unofficial Bambu Lab EU price monitor. Python standard library only."""
-import datetime as dt
-import html
-import json
-import os
-from pathlib import Path
-import smtplib
-import ssl
-import urllib.request
-from email.message import EmailMessage
+    results = {}
+    for url in sorted(urls):
+        try:
+            page, _ = fetch(url)
+            parser = JsonLdParser()
+            parser.feed(page)
+            for raw in parser.scripts:
+                try:
+                    obj = json.loads(raw)
+                except ValueError:
+                    continue
+                for node in jsonld_nodes(obj):
+                    types = node.get("@type", [])
+                    if isinstance(types, str):
+                        types = [types]
+                    if not any(t in ("Product", "ProductGroup") for t in types):
+                        continue
+                    title = str(node.get("name") or url.split("/")[-1])
+                    if not PRINTER.search(title) or EXCLUDE.search(title):
+                        continue
+                    offers = node.get("offers", [])
+                    if isinstance(offers, dict):
+                        offers = [offers]
+                    for i, offer in enumerate(offers):
+                        if not isinstance(offer, dict):
+                            continue
+                        if str(offer.get("priceCurrency", "")).upper() != "EUR":
+                            continue
+                        cents = price_eur(offer.get("price"))
+                        if not cents:
+                            continue
+                        name = title
+                        key = f"{url}#{i}"
+                        results[key] = {"name": name, "cents": cents, "url": url,
+                                        "available": "instock" in str(offer.get("availability", "")).lower(),
+                                        "source": "Produktseite (JSON-LD)"}
+            time.sleep(0.15)
+        except (OSError, ValueError) as exc:
+            failures.append(f"{url}: {type(exc).__name__} {str(exc)[:90]}")
+    return results, failures
 
-SHOP = 'https://eu.store.bambulab.com'
-# Additional product slugs can be added; only successfully accessed products are reported.
-SLUGS = ['a1-mini', 'a1', 'p1s', 'p2s', 'x1-carbon', 'h2s', 'h2d', 'h2c']
-OUT = Path('output')
+
+def money(cents):
+    return f"{cents / 100:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def get_product(slug):
-    req = urllib.request.Request(f'{SHOP}/en/products/{slug}.js', headers={
-        'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'})
-    with urllib.request.urlopen(req, timeout=20) as response:
-        data = json.load(response)
-    if not isinstance(data, dict) or not isinstance(data.get('variants'), list):
-        raise ValueError('Keine auswertbaren Varianten')
-    return data
-
-
-def euro(cents):
-    return f'{cents / 100:.2f} €'.replace('.', ',')
-
-
-def email_report(body, count):
-    names = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'MAIL_FROM', 'MAIL_TO']
-    missing = [name for name in names if not os.environ.get(name)]
+def send_mail(report):
+    required = ["SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "MAIL_FROM", "MAIL_TO"]
+    missing = [name for name in required if not os.environ.get(name)]
     if missing:
-        print('E-Mail nicht aktiviert; fehlend:', ', '.join(missing))
+        print("E-Mail nicht eingerichtet; es fehlen:", ", ".join(missing))
         return
-    message = EmailMessage()
-    message['Subject'] = f'Bambu Lab Preischeck – {dt.date.today().isoformat()} ({count} Varianten)'
-    message['From'] = os.environ['MAIL_FROM']
-    message['To'] = os.environ['MAIL_TO']
-    message.set_content('Der HTML-Bericht enthält die aktuellen Angebote.')
-    message.add_alternative(body, subtype='html')
-    port = int(os.environ.get('SMTP_PORT') or '465')
+    port = int(os.environ.get("SMTP_PORT") or "465")
+    msg = EmailMessage()
+    msg["Subject"] = "Bambu Lab Preischeck – " + dt.date.today().isoformat()
+    msg["From"] = os.environ["MAIL_FROM"]
+    msg["To"] = os.environ["MAIL_TO"]
+    msg.set_content("Der aktuelle Preisbericht ist als HTML-Version dieser E-Mail enthalten.")
+    msg.add_alternative(report, subtype="html")
     if port == 465:
-        with smtplib.SMTP_SSL(os.environ['SMTP_HOST'], port, context=ssl.create_default_context(), timeout=30) as smtp:
-            smtp.login(os.environ['SMTP_USER'], os.environ['SMTP_PASSWORD'])
-            smtp.send_message(message)
+        with smtplib.SMTP_SSL(os.environ["SMTP_HOST"], port, context=ssl.create_default_context(), timeout=30) as smtp:
+            smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+            smtp.send_message(msg)
     elif port == 587:
-        with smtplib.SMTP(os.environ['SMTP_HOST'], port, timeout=30) as smtp:
+        with smtplib.SMTP(os.environ["SMTP_HOST"], port, timeout=30) as smtp:
             smtp.starttls(context=ssl.create_default_context())
-            smtp.login(os.environ['SMTP_USER'], os.environ['SMTP_PASSWORD'])
-            smtp.send_message(message)
+            smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+            smtp.send_message(msg)
     else:
-        raise ValueError('SMTP_PORT muss 465 oder 587 sein')
-    print('Bericht per E-Mail versandt.')
+        raise ValueError("SMTP_PORT muss 465 oder 587 sein")
+    print("E-Mail erfolgreich verschickt")
 
 
 def main():
-    rows = []
-    problems = []
-    for slug in SLUGS:
-        try:
-            product = get_product(slug)
-            for variant in product['variants']:
-                price = variant.get('price')
-                if not isinstance(price, int) or price <= 0:
-                    continue
-                title = str(product.get('title') or slug)
-                extra = variant.get('public_title') or variant.get('title') or ''
-                if extra != 'Default Title':
-                    title += ' – ' + extra
-                vid = str(variant.get('id') or '')
-                rows.append({
-                    'title': title, 'price_cents': price,
-                    'available': variant.get('available'),
-                    'url': f'{SHOP}/en/products/{slug}?variant={vid}',
-                })
-        except Exception as exc:
-            problems.append(f'{slug}: {type(exc).__name__}: {str(exc)[:100]}')
-    rows.sort(key=lambda x: x['price_cents'])
-    cells = ''.join('<tr><td>' + html.escape(row['title']) + '</td><td>' +
-                    euro(row['price_cents']) + '</td><td>' +
-                    ('Ja' if row['available'] else 'Nein/Unbekannt') +
-                    '</td><td><a href="' + html.escape(row['url'], quote=True) +
-                    '">Shop</a></td></tr>' for row in rows)
-    body = ('<h2>Bambu Lab – täglicher EU-Shop-Preischeck</h2>'
-            '<p>Preise sind Momentaufnahmen; keine Garantie für Versandkosten, Rabatte oder Vollständigkeit.</p>'
-            '<table border="1" cellpadding="5"><tr><th>Modell / Variante</th><th>Preis</th>'
-            '<th>Verfügbarkeit</th><th>Link</th></tr>' + cells + '</table>')
-    if problems:
-        body += '<p><strong>Nicht geprüft:</strong> ' + html.escape('; '.join(problems)) + '</p>'
     OUT.mkdir(exist_ok=True)
-    (OUT / 'bericht.html').write_text(body, encoding='utf-8')
-    (OUT / 'preise.json').write_text(json.dumps({'variants': rows, 'errors': problems}, indent=2, ensure_ascii=False), encoding='utf-8')
-    if not rows:
-        raise RuntimeError('Keine Preise verfügbar. Produktendpunkte prüfen.')
-    email_report(body, len(rows))
+    products, errors = shopify_products()
+    results = parse_shopify(products)
+    if not results:
+        print("Keine Drucker im Katalog gefunden; versuche Produktseiten mit JSON-LD.")
+        results, fall_errors = html_fallback()
+        errors.extend(fall_errors)
+    old = {}
+    try:
+        old = json.loads(CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    entries = []
+    for key, item in sorted(results.items(), key=lambda pair: (pair[1]["cents"], pair[1]["name"])):
+        previous = old.get(key)
+        change = item["cents"] - previous if isinstance(previous, int) else None
+        entries.append({"id": key, **item, "previous_cents": previous, "change_cents": change})
+    content = {"checked_at": dt.datetime.now(dt.timezone.utc).isoformat(), "items": entries, "errors": errors}
+    (OUT / "preise.json").write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
+    trs = []
+    for row in entries:
+        delta = row["change_cents"]
+        status = "neu/kein Vergleich" if delta is None else "unverändert" if delta == 0 else (("gesunken " if delta < 0 else "gestiegen ") + money(abs(delta)))
+        availability = "Ja" if row["available"] is True else "Nein" if row["available"] is False else "Unbekannt"
+        values = [row["name"], money(row["cents"]), status, availability, row["source"]]
+        trs.append("<tr>" + "".join("<td>" + html.escape(v) + "</td>" for v in values) +
+                   '<td><a href="' + html.escape(row["url"], quote=True) + '">Zum Shop</a></td></tr>')
+    report = ("<h2>Bambu Lab – täglicher Preischeck</h2><p>" +
+              html.escape(dt.date.today().isoformat()) + " · Offizieller EU-Shop · " + str(len(entries)) +
+              " Varianten</p><p>Shoppreise ohne Gewähr; Versandkosten und externe Händler sind nicht enthalten. " +
+              "Veränderungen nur bei vorhandenem Preisstand.</p>" +
+              '<table border="1" cellpadding="5"><tr><th>Modell</th><th>Preis</th><th>Veränderung</th>' +
+              '<th>Lieferbar</th><th>Datenquelle</th><th>Link</th></tr>' + "".join(trs) + "</table>")
+    if errors:
+        report += "<h3>Technische Hinweise</h3><p>" + html.escape("; ".join(errors[:15])) + "</p>"
+    if not entries:
+        report += "<p><strong>ACHTUNG: Keine verlässlichen EUR-Preise abrufbar.</strong></p>"
+    (OUT / "bericht.html").write_text("<!doctype html><html lang='de'><meta charset='utf-8'><body>" + report + "</body></html>", encoding="utf-8")
+    if not entries:
+        print("FEHLER: Keine verifizierbaren EUR-Preise. Einzelheiten in output/preise.json")
+        sys.exit(1)
+    CACHE.parent.mkdir(exist_ok=True)
+    CACHE.write_text(json.dumps({key: item["cents"] for key, item in results.items()}, indent=2), encoding="utf-8")
+    print(f"Erfolg: {len(entries)} Produktvarianten mit EUR-Preis")
+    send_mail(report)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
