@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Bambu Lab EU Preisalarm v1.2.2.
+"""Bambu Lab EU Preisalarm, Version 1.2.3 (Python >=3.11, stdlib).
 
-Recherchiert Preise aus öffentlich abrufbaren EU-Shopdaten. Liefert immer einen
-Diagnosebericht; erfindet keine Preise. Standardbibliothek, Python >= 3.11.
+Shopify products.json exposes decimal currency amounts such as '339.00', NOT
+necessarily integer cents. Prices are only accepted for an explicitly EUR shop.
 """
-
-VERSION = "1.2.2"
+VERSION = '1.2.3'
 
 import datetime as dt
 import html
@@ -19,293 +18,184 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from email.message import EmailMessage
-from html.parser import HTMLParser
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-SHOP = "https://eu.store.bambulab.com"
-OUT = Path("output")
-CACHE = Path(".cache/preise.json")
-MAX_BYTES = 6_000_000
-MODELS = re.compile(r"(?i)\b(?:A1\s*mini|A1|P1P|P1S|P2S|X1(?:C|E)?|X1\s*Carbon|H2[SDC]|X2D)\b")
-NOT_PRINTER = re.compile(
-    r"(?i)(?:nozzle|hotend|extruder|build\s*plate|filament|refill|spool|"
-    r"accessor|spare\s*part|replacement|cable|adapter|motor|"
-    r"laser\s*module\s*only|maintenance|connector)"
-)
+OUT = Path('output')
+CACHE = Path('.cache/preise.json')
+STORE = 'https://bambulab-eu.myshopify.com'
+SHOP = 'https://eu.store.bambulab.com'
+COLLECTIONS = ('/collections/3d-printer/products.json', '/products.json')
+MODELS = re.compile(r'(?i)(?<![a-z0-9])(?:a1\s*mini|a1|p1s|p1p|p2s|x1c|x1e|x1\s*carbon|h2d|h2s|h2c|x2d)(?![a-z0-9])')
+EXCLUDE = re.compile(r'(?i)(nozzle|hotend|extruder|filament|refill|spool|cable|adapter|replacement|maintenance|spare part|build plate|accessor(?:y|ies)|toolhead|laser module only)')
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
-    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+    'User-Agent': 'Mozilla/5.0 (compatible; personal-price-check/1.2.3)',
+    'Accept': 'application/json, text/html;q=0.9',
+    'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
 }
-CANDIDATES = [
-    f"{SHOP}/de/collections/3d-printer/products.json?limit=250",
-    f"{SHOP}/collections/3d-printer/products.json?limit=250",
-    f"{SHOP}/products.json?limit=250",
-    "https://bambulab-eu.myshopify.com/collections/3d-printer/products.json?limit=250",
-]
-SLUGS = ["a1-mini", "a1", "p1s", "p2s", "x1-carbon", "h2s", "h2d", "h2c", "x2d"]
 
 
-def request_text(url):
+def get(url):
     req = urllib.request.Request(url, headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=22) as response:
-        content = response.read(MAX_BYTES + 1)
-        if len(content) > MAX_BYTES:
-            raise ValueError("Antwort ist zu groß")
-        return content.decode("utf-8", "replace"), response.geturl()
+    with urllib.request.urlopen(req, timeout=25) as response:
+        return response.read(7_000_000).decode('utf-8', 'replace'), response.geturl()
 
 
-def model_name(title):
-    return bool(MODELS.search(title)) and not bool(NOT_PRINTER.search(title))
-
-
-def euro_cents_from_shopify(value):
-    """Shopify /products.json traditionally returns integer minor units (cents).
-
-    Reject non-integers because JSON forms with decimal prices are ambiguous.
-    """
-    if isinstance(value, bool):
+def cents_from_shopify(value):
+    """Shopify products.json: decimal EUR units; do NOT treat '339.00' as cents."""
+    if value is None or isinstance(value, bool):
         return None
-    if isinstance(value, int):
-        cents = value
-    elif isinstance(value, str) and value.isdigit():
-        cents = int(value)
-    else:
+    raw = str(value).strip()
+    if not re.fullmatch(r'\d{1,5}(?:\.\d{1,2})?', raw):
         return None
-    return cents if 5_000 <= cents <= 2_000_000 else None
-
-
-def euro_cents_from_decimal(value):
-    if isinstance(value, bool) or value is None:
-        return None
-    s = str(value).strip().replace(" ", "")
-    if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
-    elif "," in s:
-        s = s.replace(",", ".")
     try:
-        amount = float(s)
-    except ValueError:
+        cents = int((Decimal(raw) * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+        return cents if 5_000 <= cents <= 2_000_000 else None
+    except InvalidOperation:
         return None
-    return round(amount * 100) if 50 <= amount <= 20_000 else None
 
 
-def parse_shopify(data, source, diagnostic):
-    products = data.get("products") if isinstance(data, dict) else None
+def parse_products(data, source, diagnostics):
+    products = data.get('products') if isinstance(data, dict) else None
     if not isinstance(products, list):
-        raise ValueError("JSON enthält keine Produktliste")
-    diagnostic.append({"source": source, "count": len(products), "titles": [str(p.get("title", ""))[:90] for p in products[:15] if isinstance(p, dict)]})
-    entries = []
-    for prod in products:
-        if not isinstance(prod, dict):
+        raise ValueError('Keine Shopify-Produktliste gefunden')
+    diagnostics.append({'url': source, 'products': len(products),
+                        'sample_titles': [str(x.get('title')) for x in products[:20] if isinstance(x, dict)],
+                        'sample_prices': [(str(x.get('title')), [str(v.get('price')) for v in x.get('variants', [])[:3] if isinstance(v, dict)])
+                                          for x in products[:8] if isinstance(x, dict)]})
+    rows = []
+    for product in products:
+        if not isinstance(product, dict):
             continue
-        title = str(prod.get("title") or "")
-        if not model_name(title):
+        name = str(product.get('title') or '')
+        if not MODELS.search(name) or EXCLUDE.search(name):
             continue
-        handle = str(prod.get("handle") or "")
-        variants = prod.get("variants")
-        if not handle or not isinstance(variants, list):
+        handle = str(product.get('handle') or '')
+        if not re.fullmatch('[a-z0-9-]+', handle):
             continue
-        for v in variants:
+        for v in product.get('variants') or []:
             if not isinstance(v, dict):
                 continue
-            variant_name = str(v.get("title") or "")
-            label = title if variant_name.lower() in ("", "default title") else f"{title} – {variant_name}"
-            if NOT_PRINTER.search(label):
+            variant = str(v.get('title') or '').strip()
+            title = name + (f' – {variant}' if variant.lower() not in ('', 'default title') else '')
+            if EXCLUDE.search(title):
                 continue
-            price = euro_cents_from_shopify(v.get("price"))
-            if price is None:
+            cents = cents_from_shopify(v.get('price'))
+            if cents is None:
                 continue
-            variant_id = str(v.get("id") or "")
-            url = f"{SHOP}/en/products/{urllib.parse.quote(handle, safe='-')}"
+            variant_id = str(v.get('id') or '')
+            link = f'{STORE}/products/{handle}'
             if variant_id.isdigit():
-                url += f"?variant={variant_id}"
-            entries.append({
-                "id": f"{handle}:{variant_id or variant_name}",
-                "name": label, "price_cents": price,
-                "available": v.get("available") if isinstance(v.get("available"), bool) else None,
-                "url": url, "laser": "laser" in label.lower(),
-                "source": source,
-                "currency_note": "Shopify-Preise in Minor Units; EUR über EU-Shop nicht verifizierbar, sofern Shop konvertiert",
-            })
-    return entries
-
-
-class LDParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.active = False
-        self.chunks = []
-        self.blocks = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag.lower() == "script" and dict(attrs).get("type", "").lower() == "application/ld+json":
-            self.active = True
-            self.chunks = []
-
-    def handle_data(self, data):
-        if self.active:
-            self.chunks.append(data)
-
-    def handle_endtag(self, tag):
-        if tag.lower() == "script" and self.active:
-            self.blocks.append("".join(self.chunks))
-            self.active = False
-
-
-def jsonld_nodes(v):
-    if isinstance(v, list):
-        for x in v:
-            yield from jsonld_nodes(x)
-    elif isinstance(v, dict):
-        yield v
-        if "@graph" in v:
-            yield from jsonld_nodes(v["@graph"])
-
-
-def parse_jsonld(page, url):
-    parser = LDParser()
-    parser.feed(page)
-    result = []
-    for block in parser.blocks:
-        try:
-            data = json.loads(block)
-        except json.JSONDecodeError:
-            continue
-        for node in jsonld_nodes(data):
-            types = node.get("@type", [])
-            if isinstance(types, str):
-                types = [types]
-            if not any(str(t).lower() in ("product", "productgroup") for t in types):
-                continue
-            title = str(node.get("name") or "")
-            if not model_name(title):
-                continue
-            offers = node.get("offers") or []
-            if isinstance(offers, dict):
-                offers = [offers]
-            for index, offer in enumerate(offers):
-                if not isinstance(offer, dict):
-                    continue
-                if str(offer.get("priceCurrency", "")).upper() != "EUR":
-                    continue
-                cents = euro_cents_from_decimal(offer.get("price"))
-                if cents is None:
-                    continue
-                result.append({
-                    "id": f"{urllib.parse.urlparse(url).path}:jsonld:{index}",
-                    "name": title, "price_cents": cents, "available": (
-                        True if "instock" in str(offer.get("availability", "")).lower() else None
-                    ), "url": url, "laser": "laser" in title.lower(),
-                    "source": "JSON-LD / EUR",
-                })
-    return result
-
-
-def fetch_prices(errors, diagnostic):
-    for url in CANDIDATES:
-        try:
-            raw, final_url = request_text(url)
-            data = json.loads(raw)
-            rows = parse_shopify(data, final_url, diagnostic)
-            print(f"Katalog {final_url}: {len(rows)} Druckervarianten")
-            if rows:
-                return rows
-        except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as e:
-            errors.append(f"{url}: {type(e).__name__}: {str(e)[:140]}")
-    rows = []
-    for slug in SLUGS:
-        url = f"{SHOP}/en/products/{slug}"
-        try:
-            raw, final_url = request_text(url)
-            items = parse_jsonld(raw, final_url)
-            rows.extend(items)
-            print(f"JSON-LD {slug}: {len(items)} EUR-Angebote")
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            errors.append(f"{url}: {type(e).__name__}: {str(e)[:140]}")
+                link += f'?variant={variant_id}'
+            rows.append({'id': handle + ':' + (variant_id or variant), 'name': title,
+                         'price_cents': cents, 'available': v.get('available') if isinstance(v.get('available'), bool) else None,
+                         'laser': 'laser' in title.lower(), 'url': link, 'source': source, 'currency': 'EUR'})
     return rows
 
 
+def download_prices():
+    diagnostics, failures = [], []
+    for endpoint in COLLECTIONS:
+        collected = []
+        for page in range(1, 5):
+            url = STORE + endpoint + '?limit=250&page=' + str(page)
+            try:
+                body, final = get(url)
+                payload = json.loads(body)
+                rows = parse_products(payload, final, diagnostics)
+                collected.extend(rows)
+                count = len(payload['products'])
+                print(f'Katalog Seite {page}: {count} Produkte, {len(rows)} Druckervarianten')
+                if count < 250:
+                    break
+            except (OSError, ValueError, KeyError, urllib.error.URLError) as exc:
+                failures.append(f'{url}: {type(exc).__name__} {str(exc)[:140]}')
+                break
+        if collected:
+            return collected, failures, diagnostics
+    return [], failures, diagnostics
+
+
 def money(cents):
-    return f"{cents / 100:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".") + " €"
+    return f'{cents / 100:,.2f}'.replace(',', '_').replace('.', ',').replace('_', '.') + ' €'
 
 
-def load_previous():
+def last_prices():
     try:
-        value = json.loads(CACHE.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (OSError, json.JSONDecodeError):
+        p = json.loads(CACHE.read_text(encoding='utf-8'))
+        return p if isinstance(p, dict) else {}
+    except (OSError, ValueError):
         return {}
 
 
-def send_mail(report, date):
-    required = ["SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "MAIL_FROM", "MAIL_TO"]
-    missing = [name for name in required if not os.environ.get(name)]
+def email_report(body, timestamp):
+    required = ('SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'MAIL_FROM', 'MAIL_TO')
+    missing = [x for x in required if not os.getenv(x)]
     if missing:
-        print("SMTP nicht konfiguriert; fehlende Secrets:", ", ".join(missing))
+        print('E-Mail deaktiviert: GitHub-Secrets fehlen: ' + ', '.join(missing))
         return
-    port = int(os.environ.get("SMTP_PORT") or "465")
     msg = EmailMessage()
-    msg["Subject"] = f"Bambu Lab Preischeck {date} – Version {VERSION}"
-    msg["From"] = os.environ["MAIL_FROM"]
-    msg["To"] = os.environ["MAIL_TO"]
-    msg.set_content("Der Preisbericht ist in der HTML-Ansicht enthalten.")
-    msg.add_alternative(report, subtype="html")
+    msg['From'] = os.environ['MAIL_FROM']
+    msg['To'] = os.environ['MAIL_TO']
+    msg['Subject'] = f'Bambu Lab Preisalarm v{VERSION} – {timestamp}'
+    msg.set_content('Der Bambu-Lab-Preisbericht ist als HTML enthalten.')
+    msg.add_alternative(body, subtype='html')
+    port = int(os.getenv('SMTP_PORT') or '465')
+    host = os.environ['SMTP_HOST']
     if port == 465:
-        with smtplib.SMTP_SSL(os.environ["SMTP_HOST"], port, timeout=30, context=ssl.create_default_context()) as smtp:
-            smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+        with smtplib.SMTP_SSL(host, port, timeout=30, context=ssl.create_default_context()) as smtp:
+            smtp.login(os.environ['SMTP_USER'], os.environ['SMTP_PASSWORD'])
             smtp.send_message(msg)
     elif port == 587:
-        with smtplib.SMTP(os.environ["SMTP_HOST"], port, timeout=30) as smtp:
+        with smtplib.SMTP(host, port, timeout=30) as smtp:
             smtp.starttls(context=ssl.create_default_context())
-            smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+            smtp.login(os.environ['SMTP_USER'], os.environ['SMTP_PASSWORD'])
             smtp.send_message(msg)
     else:
-        raise ValueError("SMTP_PORT muss 465 oder 587 sein")
-    print("E-Mail versendet.")
+        raise ValueError('SMTP_PORT muss 465 oder 587 sein')
+    print('E-Mail versendet')
 
 
 def main():
-    now = dt.datetime.now(ZoneInfo("Europe/Berlin"))
-    date = now.strftime("%d.%m.%Y %H:%M")
-    print(f"Bambu Lab Preisalarm – Version {VERSION} – {date}")
-    errors, diagnostic = [], []
-    raw_rows = fetch_prices(errors, diagnostic)
-    unique = {row["id"]: row for row in raw_rows}
-    rows = sorted(unique.values(), key=lambda row: (row["price_cents"], row["name"]))
-    previous = load_previous()
+    now = dt.datetime.now(ZoneInfo('Europe/Berlin'))
+    time_str = now.strftime('%d.%m.%Y %H:%M')
+    print(f'Bambu Lab Preisalarm v{VERSION} – {time_str}')
+    products, errors, diagnostics = download_prices()
+    products = sorted({p['id']: p for p in products}.values(), key=lambda p: (p['price_cents'], p['name']))
     OUT.mkdir(parents=True, exist_ok=True)
-    record = {"version": VERSION, "checked_at": now.isoformat(), "products": rows, "errors": errors, "diagnostic": diagnostic}
-    (OUT / "preise.json").write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-    body_rows = []
-    for row in rows:
-        old = previous.get(row["id"])
-        delta = row["price_cents"] - old if isinstance(old, int) else None
-        change = "Erstaufnahme" if delta is None else ("unverändert" if delta == 0 else ("↓ " if delta < 0 else "↑ ") + money(abs(delta)))
-        cells = [row["name"], money(row["price_cents"]), change, "ja" if row["available"] is True else "nicht bestätigt", "ja" if row["laser"] else "nicht gekennzeichnet"]
-        body_rows.append("<tr>" + "".join(f"<td>{html.escape(str(v))}</td>" for v in cells) + f'<td><a href="{html.escape(row["url"], quote=True)}">Shop</a></td></tr>')
-    report = (
-        f"<h2>Bambu Lab Preisalarm – Version {VERSION}</h2><p>{date} Uhr, {len(rows)} Produktvarianten.</p>"
-        "<p>Preise sind Momentaufnahmen; Versand, Vollständigkeit und lokale Währung müssen beim Händler geprüft werden. "
-        "Änderungen sind nur sichtbar, wenn die Vorversion aus dem Cache verfügbar ist.</p>"
-        "<table border='1' cellpadding='5'><tr><th>Modell/Variante</th><th>Preis</th><th>Änderung</th><th>Verfügbarkeit</th><th>Laser</th><th>Link</th></tr>"
-        + "".join(body_rows) + "</table>"
-    )
-    if errors:
-        report += "<h3>Technische Hinweise</h3><p>" + html.escape("; ".join(errors[:12])) + "</p>"
-    if not rows:
-        report += "<p><strong>FEHLER: Keine zuverlässigen EUR-Preise gefunden.</strong></p>"
-    (OUT / "bericht.html").write_text("<!doctype html><html lang='de'><meta charset='utf-8'><body>" + report + "</body></html>", encoding="utf-8")
-    if not rows:
-        print("Keine verwertbaren Preise gefunden. Prüfe output/preise.json auf Katalogtitel und Fehlermeldungen.")
-        sys.exit(1)
+    (OUT / 'preise.json').write_text(json.dumps({'version': VERSION, 'checked_at': now.isoformat(),
+        'products': products, 'diagnostics': diagnostics, 'errors': errors}, ensure_ascii=False, indent=2), encoding='utf-8')
+    previous = last_prices()
+    table = []
+    for item in products:
+        old = previous.get(item['id'])
+        diff = item['price_cents'] - old if type(old) is int else None
+        change = ('neu erfasst' if diff is None else 'unverändert' if diff == 0 else
+                  ('gesunken um ' if diff < 0 else 'gestiegen um ') + money(abs(diff)))
+        values = (item['name'], money(item['price_cents']), change,
+                  'ja' if item['available'] is True else 'nein' if item['available'] is False else 'unbekannt',
+                  'ja' if item['laser'] else 'nicht ausgewiesen')
+        table.append('<tr>' + ''.join('<td>' + html.escape(v) + '</td>' for v in values) +
+                     '<td><a href="' + html.escape(item['url'], quote=True) + '">Zum Shop</a></td></tr>')
+    report = (f'<h2>Bambu Lab Preisalarm v{VERSION}</h2><p>{time_str} Uhr | {len(products)} Varianten</p>'
+              '<p>Quelle: offizieller Bambu-Lab-EU-Shop (Shopify). Nur Euro-Shoppreise; Endpreis inklusive Versand '
+              'kann abweichen. Preisänderungen setzen vorherige gespeicherte Preise voraus.</p>'
+              '<table border="1" cellpadding="5"><tr><th>Modell</th><th>Preis</th><th>Änderung</th>'
+              '<th>Verfügbar</th><th>Laser</th><th>Link</th></tr>' + ''.join(table) + '</table>')
+    if not products:
+        report += '<p><strong>Fehler: Keine zuverlässigen Druckerpreise verfügbar. Siehe Diagnosedatei.</strong></p>'
+    (OUT / 'bericht.html').write_text('<!doctype html><html lang="de"><meta charset="utf-8"><body>' + report + '</body></html>', encoding='utf-8')
+    if not products:
+        print('FEHLER: Keine Druckerpreise. Siehe output/preise.json')
+        return 1
+    print(f'Erfolg: {len(products)} Druckervarianten aus EUR-Shop')
     CACHE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE.write_text(json.dumps({row["id"]: row["price_cents"] for row in rows}, indent=2), encoding="utf-8")
-    print(f"Erfolg: {len(rows)} Varianten; HTML und JSON unter output/ gespeichert.")
-    send_mail(report, date)
+    CACHE.write_text(json.dumps({x['id']: x['price_cents'] for x in products}, indent=2), encoding='utf-8')
+    email_report(report, time_str)
+    return 0
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    sys.exit(main())
