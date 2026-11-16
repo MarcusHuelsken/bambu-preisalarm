@@ -1,0 +1,30 @@
+name: Bambu Lab Preisalarm
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * *' # 08:00 MEZ, 09:00 MESZ (GitHub UTC schedule)
+permissions:
+  contents: read
+jobs:
+  preise:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Preise prüfen und Bericht senden
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: marcus.huelsken@online.de,sarah.huelsken@online.de
+        run: python preischeck.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preisbericht
+          path: output/
+          if-no-files-found: warn
