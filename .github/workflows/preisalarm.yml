@@ -1,30 +1,60 @@
 name: Bambu Lab Preisalarm
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 7 * * *' # 08:00 MEZ, 09:00 MESZ (GitHub UTC schedule)
+    # 08:00 Uhr in Deutschland: 06 UTC im Sommer / 07 UTC im Winter.
+    # Beide Termine werden geprüft; nur der passende startet den Preischeck.
+    - cron: '0 6 * * *'
+    - cron: '0 7 * * *'
+
 permissions:
   contents: read
+
 jobs:
   preise:
+    # Manuell immer starten; automatisch nur um 08:00 Europe/Berlin.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *' || github.event.schedule == '0 7 * * *'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Ortszeit prüfen
+        id: local_time
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "$(TZ=Europe/Berlin date +%H)" == "08" ]]; then
+            echo 'run_check=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run_check=false' >> "$GITHUB_OUTPUT"
+            echo 'Nicht 08:00 Uhr in Deutschland; Lauf wird übersprungen.'
+          fi
+
+      - name: Repository laden
+        if: steps.local_time.outputs.run_check == 'true'
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        if: steps.local_time.outputs.run_check == 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Preise prüfen und Bericht senden
+        if: steps.local_time.outputs.run_check == 'true'
         env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_HOST: 'smtp.1und1.de'
+          SMTP_PORT: '465'
+          SMTP_USER: 'marcus.huelsken@online.de'
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
-          MAIL_TO: marcus.huelsken@online.de,sarah.huelsken@online.de
+          MAIL_FROM: 'marcus.huelsken@online.de'
+          MAIL_TO: 'marcus.huelsken@online.de,sarah.huelsken@online.de'
         run: python preischeck.py
-      - uses: actions/upload-artifact@v4
-        if: always()
+
+      - name: Preisbericht speichern
+        if: always() && steps.local_time.outputs.run_check == 'true'
+        uses: actions/upload-artifact@v4
         with:
           name: preisbericht
           path: output/
           if-no-files-found: warn
+          retention-days: 30
