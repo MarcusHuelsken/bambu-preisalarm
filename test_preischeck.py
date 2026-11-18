@@ -50,6 +50,22 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertTrue(errors)
 
+    def test_diagnostic_when_feed_empty(self):
+        errors, diagnostics = [], []
+        with patch.object(p, 'get_json', return_value=({'products': []}, 'fixture')):
+            rows = p.official_offers(errors, diagnostics)
+        self.assertEqual(rows, [])
+        self.assertTrue(diagnostics)
+        self.assertEqual(diagnostics[0]['matching_offers'], 0)
+
+    def test_http_error_diagnostic(self):
+        from urllib.error import HTTPError
+        errors, diagnostics = [], []
+        with patch.object(p, 'get_json', side_effect=HTTPError('url', 403, 'Forbidden', None, None)):
+            rows = p.official_offers(errors, diagnostics)
+        self.assertEqual(rows, [])
+        self.assertTrue(any('HTTP 403' in e for e in errors))
+
     def test_no_invented_total(self):
         self.assertEqual(p.money(None), 'unbekannt')
         self.assertEqual(p.money(149900), '1.499,00 €')
