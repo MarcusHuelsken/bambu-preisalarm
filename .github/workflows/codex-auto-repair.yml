@@ -1,0 +1,185 @@
+name: Codex Preisalarm Auto-Reparatur
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 9 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-preisalarm-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: ${{ vars.ENABLE_CODEX_AUTOREPAIR == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check API secret is configured
+        env:
+          KEY_PRESENT: ${{ secrets.OPENAI_API_KEY != '' }}
+        run: test "$KEY_PRESENT" = 'true'
+      - name: Initial verification
+        id: initial
+        continue-on-error: true
+        run: |
+          python -m unittest discover -p 'test_*.py' -v
+          python preischeck.py
+          python .github/scripts/verify_live.py
+      - name: Codex repair attempt 1
+        if: ${{ steps.initial.outcome == 'failure' }}
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':workspace'
+          prompt: |
+            Fix the Bambu H2S Laser Full Combo 10W live retailer price monitor.
+            Current live check failed. Inspect output/preise.json, pricecheck source
+            (preischeck.py) and offline tests. Only edit preischeck.py and
+            test_preischeck.py. Never edit workflow, verifier or offers.json.
+            Do not fabricate prices, VAT, shipping or evidence. Do not weaken tests.
+            Never send emails. Make a minimal, auditable improvement.
+            Check that a real retailer page identifies the exact 10W model and
+            explicitly confirms gross consumer price. If impossible, leave it failing.
+            The goal is an actual verified live offer, not merely a green CI job.
+      - name: Verify repair attempt 1
+        id: check1
+        if: ${{ steps.initial.outcome == 'failure' }}
+        continue-on-error: true
+        run: |
+          python -m py_compile preischeck.py test_preischeck.py
+          python -m unittest discover -p 'test_*.py' -v
+          python preischeck.py
+          python .github/scripts/verify_live.py
+      - name: Codex repair attempt 2
+        if: ${{ steps.initial.outcome == 'failure' && steps.check1.outcome == 'failure' }}
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':workspace'
+          prompt: |
+            Fix the Bambu H2S Laser Full Combo 10W live retailer price monitor.
+            Current live check failed. Inspect output/preise.json, pricecheck source
+            (preischeck.py) and offline tests. Only edit preischeck.py and
+            test_preischeck.py. Never edit workflow, verifier or offers.json.
+            Do not fabricate prices, VAT, shipping or evidence. Do not weaken tests.
+            Never send emails. Make a minimal, auditable improvement.
+            Check that a real retailer page identifies the exact 10W model and
+            explicitly confirms gross consumer price. If impossible, leave it failing.
+            The goal is an actual verified live offer, not merely a green CI job.
+      - name: Verify repair attempt 2
+        id: check2
+        if: ${{ steps.initial.outcome == 'failure' && steps.check1.outcome == 'failure' }}
+        continue-on-error: true
+        run: |
+          python -m py_compile preischeck.py test_preischeck.py
+          python -m unittest discover -p 'test_*.py' -v
+          python preischeck.py
+          python .github/scripts/verify_live.py
+      - name: Codex repair attempt 3
+        if: ${{ steps.initial.outcome == 'failure' && steps.check2.outcome == 'failure' }}
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':workspace'
+          prompt: |
+            Fix the Bambu H2S Laser Full Combo 10W live retailer price monitor.
+            Current live check failed. Inspect output/preise.json, pricecheck source
+            (preischeck.py) and offline tests. Only edit preischeck.py and
+            test_preischeck.py. Never edit workflow, verifier or offers.json.
+            Do not fabricate prices, VAT, shipping or evidence. Do not weaken tests.
+            Never send emails. Make a minimal, auditable improvement.
+            Check that a real retailer page identifies the exact 10W model and
+            explicitly confirms gross consumer price. If impossible, leave it failing.
+            The goal is an actual verified live offer, not merely a green CI job.
+      - name: Verify repair attempt 3
+        id: check3
+        if: ${{ steps.initial.outcome == 'failure' && steps.check2.outcome == 'failure' }}
+        continue-on-error: true
+        run: |
+          python -m py_compile preischeck.py test_preischeck.py
+          python -m unittest discover -p 'test_*.py' -v
+          python preischeck.py
+          python .github/scripts/verify_live.py
+      - name: Reject unauthorized file changes
+        id: scope
+        if: ${{ steps.initial.outcome == 'success' || steps.check1.outcome == 'success' || steps.check2.outcome == 'success' || steps.check3.outcome == 'success' }}
+        run: |
+          python - <<'PY'
+          import subprocess
+          allowed = {'preischeck.py', 'test_preischeck.py'}
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          untracked = set(subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard'], text=True).splitlines())
+          # Reports and caches are generated during verification and never published.
+          untracked = {p for p in untracked if not p.startswith(('output/', '.cache/', '__pycache__/'))}
+          assert changed <= allowed, f'Unauthorized tracked changes: {changed - allowed}'
+          assert not untracked, f'Unauthorized new files: {untracked}'
+          assert changed, 'No code change to publish'
+          PY
+      - name: Export patch
+        if: ${{ steps.scope.outcome == 'success' }}
+        run: git diff --binary -- preischeck.py test_preischeck.py > repair.patch
+      - uses: actions/upload-artifact@v4
+        if: ${{ steps.scope.outcome == 'success' }}
+        with:
+          name: verified-repair-patch
+          path: repair.patch
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: repair
+    if: ${{ needs.repair.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-repair-patch
+      - name: Apply verified patch
+        run: |
+          test -s repair.patch
+          git apply --check repair.patch
+          git apply repair.patch
+      - name: Independent final verification
+        run: |
+          python -m py_compile preischeck.py test_preischeck.py
+          python -m unittest discover -p 'test_*.py' -v
+          python preischeck.py
+          python .github/scripts/verify_live.py
+      - name: Open review-only pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "codex/preisalarm-repair-$RUN_ID"
+          git add preischeck.py test_preischeck.py
+          git commit -m "fix: validate live H2S 10W gross price"
+          git push origin "HEAD:codex/preisalarm-repair-$RUN_ID"
+          gh pr create --base main --head "codex/preisalarm-repair-$RUN_ID" \
+            --title "fix: Codex-Preisalarm nach Live-Prüfung repariert" \
+            --body "Automatisch erzeugte Reparatur. Unit-Tests und echter Live-Bruttopreis-Check bestanden. Testlauf: $RUN_URL. Bitte Änderungen und Preisnachweis vor dem Merge manuell prüfen. Kein Auto-Merge."
