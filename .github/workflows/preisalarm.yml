@@ -1,10 +1,8 @@
-name: Bambu Lab Preisalarm
+name: Bambu H2S Laser 10W Preisalarm
 
 on:
   workflow_dispatch:
   schedule:
-    # 08:00 Uhr in Deutschland: 06 UTC im Sommer / 07 UTC im Winter.
-    # Beide Termine werden geprüft; nur der passende startet den Preischeck.
     - cron: '0 6 * * *'
     - cron: '0 7 * * *'
 
@@ -13,48 +11,60 @@ permissions:
 
 jobs:
   preise:
-    # Manuell immer starten; automatisch nur um 08:00 Europe/Berlin.
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *' || github.event.schedule == '0 7 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Ortszeit prüfen
+      - name: Ortszeit pruefen
         id: local_time
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "$(TZ=Europe/Berlin date +%H)" == "08" ]]; then
+          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]] || [[ "$(TZ=Europe/Berlin date +%H)" == '08' ]]; then
             echo 'run_check=true' >> "$GITHUB_OUTPUT"
           else
             echo 'run_check=false' >> "$GITHUB_OUTPUT"
-            echo 'Nicht 08:00 Uhr in Deutschland; Lauf wird übersprungen.'
           fi
-
       - name: Repository laden
         if: steps.local_time.outputs.run_check == 'true'
         uses: actions/checkout@v4
-
       - name: Python einrichten
         if: steps.local_time.outputs.run_check == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      - name: Preise prüfen und Bericht senden
+      - name: Preisverlauf wiederherstellen
+        if: steps.local_time.outputs.run_check == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/preise.json
+          key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            h2s-laser-
+      - name: Syntax und Tests
+        if: steps.local_time.outputs.run_check == 'true'
+        run: |
+          python -m py_compile preischeck.py
+          python -m unittest discover -p 'test_*.py'
+      - name: Preise pruefen und E-Mail senden
         if: steps.local_time.outputs.run_check == 'true'
         env:
-          SMTP_HOST: 'smtp.1und1.de'
+          SMTP_HOST: smtp.1und1.de
           SMTP_PORT: '465'
-          SMTP_USER: 'marcus.huelsken@online.de'
+          SMTP_USER: marcus.huelsken@online.de
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          MAIL_FROM: 'marcus.huelsken@online.de'
-          MAIL_TO: 'marcus.huelsken@online.de,sarah.huelsken@online.de'
+          MAIL_FROM: marcus.huelsken@online.de
+          MAIL_TO: marcus.huelsken@online.de,sarah.huelsken@online.de
         run: python preischeck.py
-
+      - name: Preisverlauf speichern
+        if: success() && steps.local_time.outputs.run_check == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/preise.json
+          key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Preisbericht speichern
         if: always() && steps.local_time.outputs.run_check == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: preisbericht
+          name: h2s-laser-preisbericht
           path: output/
           if-no-files-found: warn
           retention-days: 30
