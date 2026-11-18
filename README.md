@@ -1,19 +1,17 @@
-# Bambu Lab Preisalarm
+# Bambu Lab H2S Laser Full Combo 10W Preisalarm v1.3.1
 
-Automatischer täglicher Preischeck für im offiziellen Bambu-Lab-EU-Shop abrufbare Modellvarianten. Startet mit der Python-Standardbibliothek, ohne kostenpflichtige APIs.
+Python 3.11+; keine externen Python-Abhängigkeiten. Nur H2S Laser Full Combo 10W.
 
-## Einrichtung
+- `python -m py_compile preischeck.py test_preischeck.py`
+- `python -m unittest discover -p 'test_*.py' -v`
+- `python preischeck.py` (echter Shopabruf, Internet erforderlich)
 
-1. Dateien dieses ZIP-Archivs in das öffentliche GitHub-Repository hochladen (auch den Ordner `.github/workflows`).
-2. Unter **Settings → Secrets and variables → Actions → New repository secret** folgende Secrets anlegen: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM`.
-3. `SMTP_HOST` und `SMTP_PORT` dem E-Mail-Anbieter bzw. den Outlook-Kontoeinstellungen entnehmen. `SMTP_USER` und `MAIL_FROM` sind üblicherweise `Marcus.Huelsken@online.de`. Passwort ausschließlich als GitHub-Secret hinterlegen, nicht in Dateien oder Chat-Nachrichten.
-4. Unter **Actions → Bambu Lab Preisalarm → Run workflow** einen Testlauf starten.
+Die Daten werden in `output/preise.json` und `output/bericht.html` gespeichert.
+Die GitHub Action startet täglich um 08:00 Uhr Europe/Berlin (zwei UTC-Crons mit Ortszeitfilter) sowie manuell.
 
-Die E-Mail geht an `marcus.huelsken@online.de` und `sarah.huelsken@online.de`.
+Für E-Mail ist im Workflow die bisherige SMTP-Konfiguration erhalten. Unter GitHub Settings > Secrets and variables > Actions muss `SMTP_PASSWORD` als Secret hinterlegt sein. Andere SMTP-Werte können bei Bedarf ebenfalls in Secrets ausgelagert werden.
+**Keine Passwörter oder E-Mail-Adressen in öffentliche Workflow-Dateien schreiben.**
 
-## Grenzen
+Optional `offers.json`: JSON-Liste mit `name`, `merchant`, `link`, `price_eur`, `shipping_eur`, `discount_eur`, `available`, `verified_on` (ISO-Datum, höchstens zwei Tage alt). Nur nach realer Einzelprüfung eintragen. Fehlende Versandkosten führen zu unbekanntem Endpreis.
 
-- Aktuell werden nur öffentliche Bambu-Lab-EU-Shop-Produktendpunkte geprüft, **keine** Drittanbieter. Nicht abrufbare Modelle werden als solche protokolliert.
-- Das Script speichert einen aktuellen Bericht (JSON + HTML) in den GitHub-Actions-Artefakten. Es enthält noch **keinen historischen Preisvergleich**.
-- Die GitHub-Actions-Zeitplanung basiert auf UTC. Die Vorlage läuft um 07:00 UTC: 08:00 Uhr im Winter, 09:00 Uhr im Sommer. Für ganzjährige 08:00 Uhr in Deutschland ist eine zusätzliche Zeitzonenlösung nötig.
-- GitHub kann geplante Runs verzögern, außerdem können inaktiven öffentlichen Repositories geplante Workflows deaktiviert werden.
+Shopify-Katalogwerte sind keine nachgewiesenen Checkout-Endpreise. Offline-Tests verwenden fiktive Testwerte, keine realen Marktpreise. Bei fehlenden Angeboten wird der Workflow als Fehler beendet und das Diagnoseartefakt trotzdem hochgeladen.
