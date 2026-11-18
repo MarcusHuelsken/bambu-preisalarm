@@ -1,0 +1,67 @@
+name: Bambu H2S Laser 10W Preisalarm v1.3.2
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *'
+    - cron: '0 7 * * *'
+permissions:
+  contents: read
+jobs:
+  preise:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Ortszeit pruefen
+        id: local_time
+        shell: bash
+        run: |
+          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]] || [[ "$(TZ=Europe/Berlin date +%H)" == '08' ]]; then
+            echo 'run_check=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run_check=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Repository laden
+        if: steps.local_time.outputs.run_check == 'true'
+        uses: actions/checkout@v4
+      - name: Python einrichten
+        if: steps.local_time.outputs.run_check == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Preisverlauf wiederherstellen
+        if: steps.local_time.outputs.run_check == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/preise.json
+          key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            h2s-laser-
+      - name: Syntax und Tests
+        if: steps.local_time.outputs.run_check == 'true'
+        run: |
+          python -m py_compile preischeck.py test_preischeck.py
+          python -m unittest discover -p 'test_*.py' -v
+      - name: Preise pruefen und E-Mail senden
+        if: steps.local_time.outputs.run_check == 'true'
+        env:
+          SMTP_HOST: smtp.1und1.de
+          SMTP_PORT: '465'
+          SMTP_USER: marcus.huelsken@online.de
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_FROM: marcus.huelsken@online.de
+          MAIL_TO: marcus.huelsken@online.de,sarah.huelsken@online.de
+        run: python preischeck.py
+      - name: Preisverlauf speichern
+        if: success() && steps.local_time.outputs.run_check == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/preise.json
+          key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Preisbericht speichern
+        if: always() && steps.local_time.outputs.run_check == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: h2s-laser-preisbericht_v1.3.2
+          path: output/
+          if-no-files-found: warn
+          retention-days: 30
