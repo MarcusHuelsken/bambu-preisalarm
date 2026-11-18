@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""Bambu H2S Laser Full Combo 10W price monitor v1.3.2 (Python 3.11+)."""
-VERSION = '1.3.2'
+"""Bambu H2S Laser Full Combo 10W price monitor, version 1.3.3.
+
+Conservative price extraction from exact-model retailer pages and optional
+manually verified offers. No guessing about VAT, shipping or discounts.
+"""
+VERSION = '1.3.3'
 import datetime as dt
 import html
 import json
@@ -10,7 +14,6 @@ import smtplib
 import ssl
 import sys
 import urllib.request
-import urllib.error
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from pathlib import Path
@@ -19,232 +22,222 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / 'output'
 CACHE = ROOT / '.cache' / 'preise.json'
-STORE = 'https://bambulab-eu.myshopify.com'
-PRODUCT_URL = 'https://eu.store.bambulab.com'
-ENDPOINTS = ('/collections/3d-printer/products.json', '/products.json')
-HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; bambu-price-monitor/1.3.2)', 'Accept': 'application/json', 'Accept-Language': 'de-DE,de;q=0.9'}
+HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; H2S-price-monitor/1.3.3)', 'Accept-Language': 'de-DE,de;q=0.9'}
+SOURCES = [
+    {'merchant': 'reichelt elektronik', 'url': 'https://www.reichelt.de/de/de/shop/produkt/3d_drucker_bambu_lab_h2s_laser_full_combo_10_w-412547', 'kind': 'net'},
+    {'merchant': 'IGO3D', 'url': 'https://www.igo3d.com/bambu-lab-h2s-laser-full-combo-10-w-en', 'kind': 'variant'},
+    {'merchant': 'Polyfab3D', 'url': 'https://www.polyfab3d.de/bambu-lab-3d-drucker/4769-bambu-lab-h2s-laser-full-combo-10w.html', 'kind': 'net'},
+]
 
 
 def cents(value):
     if value is None or isinstance(value, bool):
         return None
     raw = str(value).strip()
-    if not re.fullmatch(r'\d{1,5}(?:\.\d{1,2})?', raw):
+    if not re.fullmatch(r'\d{1,6}(?:\.\d{1,2})?', raw):
         return None
     try:
         n = int(Decimal(raw) * 100)
-        return n if 0 <= n <= 2_000_000 else None
+        return n if 50000 <= n <= 2000000 else None
     except InvalidOperation:
         return None
 
 
-def target_variant(text):
-    s = re.sub(r'\s+', ' ', text.lower())
+def target_variant(name):
+    s = re.sub(r'\s+', ' ', str(name).lower())
     required = (r'\bh2s\b', r'\blaser\b', r'\bfull\s*combo\b', r'\b10\s*w(?:att)?\b')
-    forbidden = (r'\b40\s*w(?:att)?\b', r'\bwithout\s+laser\b', r'\bohne\s+laser\b',
-                 r'\bmodule\s+only\b', r'\bupgrade\s+kit\b', r'\breplacement\b')
+    forbidden = (r'\b40\s*w(?:att)?\b', r'\bh2d\b', r'\bh2c\b', r'\bupgrade\b', r'\bmodule only\b')
     return all(re.search(p, s) for p in required) and not any(re.search(p, s) for p in forbidden)
 
 
-def get_json(url):
+def fetch_page(url):
     req = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(req, timeout=25) as response:
-        raw = response.read(6_000_001)
-        if len(raw) > 6_000_000:
-            raise ValueError('Response too large')
-        return json.loads(raw.decode('utf-8')), response.geturl()
+        if not response.geturl().startswith('https://'):
+            raise ValueError('Unsafe redirect')
+        content = response.read(3_000_001)
+        if len(content) > 3_000_000:
+            raise ValueError('HTML too large')
+        return content.decode('utf-8', errors='replace')
 
 
-def parse_shopify(data, source):
-    products = data.get('products') if isinstance(data, dict) else None
-    if not isinstance(products, list):
-        raise ValueError('Shopify products list missing')
-    rows = []
-    for product in products:
-        if not isinstance(product, dict):
+def ld_objects(page):
+    for match in re.finditer(r'<script\b[^>]*type\s*=\s*["\']application/ld\+json["\'][^>]*>(.*?)</script\s*>', page, re.I | re.S):
+        try:
+            obj = json.loads(html.unescape(match.group(1)))
+        except ValueError:
             continue
-        title, handle = str(product.get('title') or ''), str(product.get('handle') or '')
-        if not re.fullmatch(r'[a-z0-9-]+', handle):
+        stack = [obj]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, list):
+                stack.extend(node)
+            elif isinstance(node, dict):
+                yield node
+                if '@graph' in node:
+                    stack.append(node['@graph'])
+
+
+def product_offers(page, source):
+    """Only accept a single-product page whose JSON-LD name exactly matches.
+
+    Variant-selection pages are deliberately excluded because their visible
+    default price may refer to a cheaper non-laser model.
+    """
+    errors = []
+    if source['kind'] == 'variant':
+        return [], ['Variantenseite: Preis nicht eindeutig der 10W-Variante zugeordnet']
+    for node in ld_objects(page):
+        typ = node.get('@type', '')
+        if isinstance(typ, list):
+            is_product = 'Product' in typ
+        else:
+            is_product = typ == 'Product' or str(typ).endswith('/Product')
+        if not is_product or not target_variant(node.get('name', '')):
             continue
-        for variant in product.get('variants') or []:
-            if not isinstance(variant, dict):
+        offers = node.get('offers') or []
+        if isinstance(offers, dict):
+            offers = [offers]
+        for offer in offers if isinstance(offers, list) else []:
+            if not isinstance(offer, dict) or offer.get('priceCurrency') != 'EUR':
                 continue
-            name = title + ' – ' + str(variant.get('title') or '')
-            if not target_variant(name):
+            price = cents(offer.get('price'))
+            if price is None:
                 continue
-            price = cents(variant.get('price'))
-            if price is None or price < 50_000:
+            # Do not label net prices as consumer gross prices.
+            if source['kind'] == 'net':
+                errors.append('Nettopreis erkannt; nicht als Verbraucher-Endpreis übernommen')
                 continue
-            vid = str(variant.get('id') or '')
-            url = PRODUCT_URL + '/products/' + handle + ('?variant=' + vid if vid.isdigit() else '')
-            rows.append({'id': f'bambu:{handle}:{vid or name}', 'name': name, 'merchant': 'Bambu Lab EU',
-                         'price_cents': price, 'shipping_cents': None, 'discount_cents': 0,
-                         'total_cents': None, 'available': variant.get('available'), 'laser_watts': 10,
-                         'link': url, 'source': source, 'price_basis': 'EUR catalogue; shipping/promotions not verified'})
-    return rows
+            if offer.get('valueAddedTaxIncluded') is not True:
+                errors.append('MwSt.-Status nicht ausdrücklich bestätigt')
+                continue
+            return [{'id': 'retailer:' + source['merchant'], 'name': node['name'],
+                     'merchant': source['merchant'], 'price_cents': price,
+                     'shipping_cents': None, 'discount_cents': 0, 'total_cents': None,
+                     'available': None, 'link': source['url'],
+                     'source': 'Live JSON-LD', 'price_basis': 'Bruttopreis; Versand unbekannt'}], errors
+    return [], errors or ['Kein eindeutig zuordenbares JSON-LD-Angebot']
 
 
-def official_offers(errors, diagnostics):
-    for endpoint in ENDPOINTS:
-        found = []
-        for page in range(1, 5):
-            url = STORE + endpoint + f'?limit=250&page={page}'
-            try:
-                data, final_url = get_json(url)
-                offers = parse_shopify(data, final_url)
-                candidates = [str(p.get('title') or '') for p in data['products']
-                              if isinstance(p, dict) and re.search(r'h2s|laser', str(p.get('title') or ''), re.I)]
-                diagnostics.append({'source': final_url, 'product_count': len(data['products']),
-                                    'matching_offers': len(offers), 'candidate_count': len(candidates),
-                                    'candidate_titles': candidates[:30],
-                                    'sample_titles': [str(p.get('title')) for p in data['products'][:15] if isinstance(p, dict)]})
-                found.extend(offers)
-                if len(data['products']) < 250:
-                    break
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                detail = f'HTTP {exc.code}' if isinstance(exc, urllib.error.HTTPError) else f'{type(exc).__name__}: {str(exc)[:160]}'
-                errors.append(f'{url}: {detail}')
-                diagnostics.append({'source': url, 'error': detail})
-                break
-        if found:
-            return found
-    return []
-
-
-def extra_offers(errors, today=None):
-    today = today or dt.datetime.now(ZoneInfo('Europe/Berlin')).date()
+def extra_offers(today, errors):
     path = ROOT / 'offers.json'
     if not path.exists():
         return []
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(data, list):
+            raise ValueError('Expected list')
     except (OSError, ValueError) as exc:
-        errors.append(f'offers.json unreadable: {exc}')
-        return []
-    if not isinstance(data, list):
-        errors.append('offers.json must be a list')
+        errors.append('offers.json: ' + str(exc))
         return []
     result = []
-    for i, item in enumerate(data):
-        if not isinstance(item, dict) or not target_variant(str(item.get('name') or '')):
-            errors.append(f'External offer {i}: wrong model/format')
-            continue
-        price, shipping, discount = cents(item.get('price_eur')), cents(item.get('shipping_eur')), cents(item.get('discount_eur', 0))
-        merchant, link = str(item.get('merchant') or '').strip(), str(item.get('link') or '').strip()
+    for i, offer in enumerate(data):
         try:
-            verified = dt.date.fromisoformat(str(item.get('verified_on') or ''))
-        except ValueError:
-            errors.append(f'External offer {i}: invalid verification date')
-            continue
-        if (price is None or price < 50_000 or discount is None or not merchant or
-                not re.fullmatch(r'https://[^\s/]+(?:/[^\s]*)?', link) or not (0 <= (today - verified).days <= 2) or
-                discount > price + (shipping or 0)):
-            errors.append(f'External offer {i}: incomplete/stale/invalid')
-            continue
-        result.append({'id': f'external:{merchant}:{link}', 'name': item['name'], 'merchant': merchant,
-                       'price_cents': price, 'shipping_cents': shipping, 'discount_cents': discount,
-                       'total_cents': price + shipping - discount if shipping is not None else None,
-                       'available': item.get('available'), 'laser_watts': 10, 'link': link,
-                       'source': f'manually verified {verified}', 'price_basis': 'Manually verified retailer offer'})
+            if not isinstance(offer, dict) or not target_variant(offer.get('name', '')):
+                raise ValueError('Wrong model')
+            date = dt.date.fromisoformat(offer['verified_on'])
+            if not 0 <= (today - date).days <= 2:
+                raise ValueError('Verification too old')
+            price = cents(offer['price_eur'])
+            shipping = cents(offer['shipping_eur']) if offer.get('shipping_eur') is not None else None
+            discount = int(Decimal(str(offer.get('discount_eur', 0))) * 100)
+            if price is None or discount < 0 or discount > price or not str(offer['link']).startswith('https://'):
+                raise ValueError('Invalid amounts or URL')
+            if offer.get('vat_included') is not True:
+                raise ValueError('Gross price not verified (vat_included must be true)')
+            result.append({'id': 'manual:' + str(offer['link']), 'name': offer['name'],
+                           'merchant': offer['merchant'], 'price_cents': price,
+                           'shipping_cents': shipping, 'discount_cents': discount,
+                           'total_cents': price + shipping - discount if shipping is not None else None,
+                           'available': offer.get('available'), 'link': offer['link'],
+                           'source': 'Manual verification ' + offer['verified_on'],
+                           'price_basis': 'Gross price; verified manual entry'})
+        except (KeyError, ValueError, TypeError, InvalidOperation) as exc:
+            errors.append(f'offers.json entry {i}: {exc}')
     return result
 
 
-def money(value):
-    return 'unbekannt' if value is None else f'{value // 100:,}'.replace(',', '.') + f',{value % 100:02d} €'
+def money(n):
+    return 'unbekannt' if n is None else f'{n / 100:.2f} €'.replace('.', ',')
 
 
-def previous_prices():
-    try:
-        value = json.loads(CACHE.read_text(encoding='utf-8'))
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def attach_changes(rows, previous):
-    for row in rows:
-        prior = previous.get(row['id'])
-        prior = prior if isinstance(prior, dict) else {}
-        current_total = row['total_cents']
-        prior_total = prior.get('total_cents')
-        prior_price = prior.get('price_cents')
-        if type(current_total) is int and type(prior_total) is int:
-            row['change_cents'], row['change_basis'] = current_total - prior_total, 'Endpreis'
-        elif type(prior_price) is int:
-            row['change_cents'], row['change_basis'] = row['price_cents'] - prior_price, 'Geraetepreis (ohne Versand)'
-        else:
-            row['change_cents'], row['change_basis'] = None, 'noch kein Vergleich'
-
-
-def email_report(markup, stamp):
-    required = ('SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'MAIL_FROM', 'MAIL_TO')
-    missing = [key for key in required if not os.getenv(key)]
+def send_email(markup, stamp):
+    keys = ('SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'MAIL_FROM', 'MAIL_TO')
+    missing = [key for key in keys if not os.getenv(key)]
     if missing:
         print('E-Mail nicht konfiguriert: ' + ', '.join(missing))
         return
     msg = EmailMessage()
     msg['From'], msg['To'] = os.environ['MAIL_FROM'], os.environ['MAIL_TO']
-    msg['Subject'] = f'H2S Laser Full Combo 10W Preisalarm – {stamp}'
-    msg.set_content('Preisbericht als HTML enthalten.')
+    msg['Subject'] = f'H2S Laser Full Combo 10W Preisalarm v{VERSION} – {stamp}'
+    msg.set_content('HTML-Bericht im Anhang der E-Mail.')
     msg.add_alternative(markup, subtype='html')
-    port = int(os.getenv('SMTP_PORT') or '465')
+    port = int(os.getenv('SMTP_PORT', '465'))
     if port not in (465, 587):
         raise ValueError('SMTP_PORT must be 465 or 587')
-    smtp = (smtplib.SMTP_SSL(os.environ['SMTP_HOST'], port, timeout=30, context=ssl.create_default_context())
-            if port == 465 else smtplib.SMTP(os.environ['SMTP_HOST'], port, timeout=30))
-    with smtp:
+    with (smtplib.SMTP_SSL(os.environ['SMTP_HOST'], port, timeout=30, context=ssl.create_default_context())
+          if port == 465 else smtplib.SMTP(os.environ['SMTP_HOST'], port, timeout=30)) as smtp:
         if port == 587:
             smtp.starttls(context=ssl.create_default_context())
         smtp.login(os.environ['SMTP_USER'], os.environ['SMTP_PASSWORD'])
         smtp.send_message(msg)
-    print('E-Mail versendet')
 
 
 def main():
     now = dt.datetime.now(ZoneInfo('Europe/Berlin'))
-    stamp = now.strftime('%d.%m.%Y %H:%M')
-    errors, diagnostics = [], []
-    rows = official_offers(errors, diagnostics) + extra_offers(errors, now.date())
-    rows = list({r['id']: r for r in rows}.values())
-    rows.sort(key=lambda r: (r['total_cents'] is None, r['total_cents'] if r['total_cents'] is not None else r['price_cents']))
-    attach_changes(rows, previous_prices())
-    OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / f'preise_v{VERSION}.json').write_text(json.dumps({'version': VERSION, 'checked_at': now.isoformat(),
-        'target': 'Bambu Lab H2S Laser Full Combo 10W', 'offers': rows,
-        'errors': errors, 'diagnostics': diagnostics}, ensure_ascii=False, indent=2), encoding='utf-8')
-    table = []
+    errors, diagnostics, rows = [], [], []
+    for source in SOURCES:
+        try:
+            page = fetch_page(source['url'])
+            offers, warnings = product_offers(page, source)
+            rows.extend(offers)
+            diagnostics.append({'merchant': source['merchant'], 'url': source['url'],
+                                'bytes': len(page), 'offers': len(offers), 'notes': warnings})
+        except (OSError, ValueError) as exc:
+            errors.append(source['merchant'] + ': ' + type(exc).__name__ + ': ' + str(exc)[:160])
+    rows.extend(extra_offers(now.date(), errors))
+    rows.sort(key=lambda x: (x['total_cents'] is None, x['total_cents'] or x['price_cents']))
+    previous = {}
+    try:
+        previous = json.loads(CACHE.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        pass
     for row in rows:
-        change = row['change_cents']
-        change_text = ('noch kein Vergleich' if change is None else 'unveraendert' if change == 0 else
-                       ('gesunken ' if change < 0 else 'gestiegen ') + money(abs(change)))
-        values = [row['merchant'], money(row['price_cents']), money(row['shipping_cents']),
-                  money(row['discount_cents']), money(row['total_cents']),
-                  change_text + ' (' + row['change_basis'] + ')',
-                  'ja' if row['available'] is True else 'nein' if row['available'] is False else 'unbekannt']
-        table.append('<tr>' + ''.join('<td>' + html.escape(str(v)) + '</td>' for v in values)
-                     + '<td><a href="' + html.escape(row['link'], quote=True) + '">Angebot</a></td></tr>')
-    report = ('<h2>H2S Laser Full Combo 10W | ' + html.escape(stamp) + '</h2>'
-              '<p>Nur das H2S Laser Full Combo 10W. Katalogpreise ohne verifizierten Versand sind keine Endpreise.</p>'
-              '<table border="1" cellpadding="5"><tr><th>Händler</th><th>Preis</th><th>Versand</th>'
-              '<th>Rabatt</th><th>Endpreis</th><th>Änderung</th><th>Lieferbar</th><th>Link</th></tr>'
-              + ''.join(table) + '</table>')
+        old = previous.get(row['id'], {}) if isinstance(previous, dict) else {}
+        if old.get('total_cents') is not None and row['total_cents'] is not None:
+            row['change_cents'] = row['total_cents'] - old['total_cents']
+            row['change_basis'] = 'Endpreis'
+        elif old.get('price_cents') is not None:
+            row['change_cents'] = row['price_cents'] - old['price_cents']
+            row['change_basis'] = 'Gerätepreis'
+        else:
+            row['change_cents'], row['change_basis'] = None, 'Kein Vergleich'
+    OUT.mkdir(exist_ok=True)
+    report = {'version': VERSION, 'checked_at': now.isoformat(), 'target': 'Bambu Lab H2S Laser Full Combo 10W',
+              'offers': rows, 'errors': errors, 'diagnostics': diagnostics}
+    (OUT / 'preise.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    trs = []
+    for row in rows:
+        cells = [row['merchant'], money(row['price_cents']), money(row['shipping_cents']),
+                 money(row['total_cents']), row['change_basis'],
+                 money(row['change_cents']) if row['change_cents'] is not None else '—']
+        trs.append('<tr>' + ''.join('<td>' + html.escape(str(c)) + '</td>' for c in cells)
+                   + '<td><a href="' + html.escape(row['link'], quote=True) + '">Angebot</a></td></tr>')
+    markup = ('<h2>H2S Laser Full Combo 10W – v' + VERSION + '</h2>'
+              '<p>Nur nachweisbare Brutto-Gerätepreise; Versand wird niemals geschätzt.</p>'
+              '<table border="1"><tr><th>Händler</th><th>Gerätepreis</th><th>Versand</th>'
+              '<th>Endpreis</th><th>Vergleichsbasis</th><th>Änderung</th><th>Link</th></tr>'
+              + ''.join(trs) + '</table>')
     if not rows:
-        report += '<p><strong>Keine verlässlich identifizierten Angebote.</strong></p>'
-    if errors:
-        report += '<p>Hinweise: ' + html.escape('; '.join(errors[:8])) + '</p>'
-    (OUT / f'bericht_v{VERSION}.html').write_text('<!doctype html><html lang="de"><meta charset="utf-8"><body>' + report + '</body></html>', encoding='utf-8')
+        markup += '<p>Keine eindeutig bestätigten Bruttopreise gefunden. Siehe preise.json.</p>'
+    (OUT / 'bericht.html').write_text('<!doctype html><html lang="de"><meta charset="utf-8"><body>' + markup + '</body></html>', encoding='utf-8')
     if not rows:
-        print('FEHLER: Keine H2S Laser Full Combo 10W Angebote erkannt')
-        for entry in diagnostics:
-            print('DIAGNOSE: ' + json.dumps(entry, ensure_ascii=False)[:900])
-        for error in errors:
-            print('ABRUF-FEHLER: ' + error[:250])
+        print('FEHLER: Keine eindeutig verifizierten Brutto-Angebote. Siehe output/preise.json')
         return 1
-    CACHE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE.write_text(json.dumps({r['id']: {'total_cents': r['total_cents'], 'price_cents': r['price_cents']}
-                                 for r in rows}, indent=2), encoding='utf-8')
-    print(f'H2S Laser Full Combo 10W: {len(rows)} Angebote; {sum(r["total_cents"] is not None for r in rows)} vollständige Endpreise')
-    email_report(report, stamp)
+    CACHE.parent.mkdir(exist_ok=True)
+    CACHE.write_text(json.dumps({r['id']: {'price_cents': r['price_cents'], 'total_cents': r['total_cents']} for r in rows}), encoding='utf-8')
+    print(f'v{VERSION}: {len(rows)} verifizierte Angebote')
+    send_email(markup, now.strftime('%d.%m.%Y %H:%M'))
     return 0
 
 
