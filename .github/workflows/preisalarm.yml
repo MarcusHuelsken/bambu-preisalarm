@@ -19,7 +19,7 @@ jobs:
         id: local_time
         shell: bash
         run: |
-          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]] || [[ "$(TZ=Europe/Berlin date +%H)" == '08' ]]; then
+          if [[ '${{ github.event_name }}' != 'schedule' ]] || [[ "$(TZ=Europe/Berlin date +%H)" == '08' ]]; then
             echo 'run_check=true' >> "$GITHUB_OUTPUT"
           else
             echo 'run_check=false' >> "$GITHUB_OUTPUT"
