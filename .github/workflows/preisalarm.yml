@@ -2,6 +2,9 @@
 name: Bambu H2S Laser 10W Preisalarm
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - fix/live-price-validation
   schedule:
     - cron: '0 6 * * *'
     - cron: '0 7 * * *'
@@ -45,7 +48,7 @@ jobs:
           SMTP_HOST: smtp.1und1.de
           SMTP_PORT: '465'
           SMTP_USER: marcus.huelsken@online.de
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_PASSWORD: ${{ github.ref == 'refs/heads/main' && secrets.SMTP_PASSWORD || '' }}
           MAIL_FROM: marcus.huelsken@online.de
           MAIL_TO: marcus.huelsken@online.de,sarah.huelsken@online.de
         run: python preischeck.py
