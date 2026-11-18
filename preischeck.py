@@ -233,6 +233,10 @@ def main():
     (OUT / 'bericht.html').write_text('<!doctype html><html lang="de"><meta charset="utf-8"><body>' + markup + '</body></html>', encoding='utf-8')
     if not rows:
         print('FEHLER: Keine eindeutig verifizierten Brutto-Angebote. Siehe output/preise.json')
+        for item in diagnostics:
+            print('DIAGNOSE: ' + item['merchant'] + ': ' + '; '.join(item['notes']))
+        for error in errors:
+            print('ABRUFFEHLER: ' + error)
         return 1
     CACHE.parent.mkdir(exist_ok=True)
     CACHE.write_text(json.dumps({r['id']: {'price_cents': r['price_cents'], 'total_cents': r['total_cents']} for r in rows}), encoding='utf-8')
