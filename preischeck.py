@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Bambu H2S Laser Full Combo 10W price monitor v1.3.1 (Python 3.11+)."""
-VERSION = '1.3.1'
+"""Bambu H2S Laser Full Combo 10W price monitor v1.3.2 (Python 3.11+)."""
+VERSION = '1.3.2'
 import datetime as dt
 import html
 import json
@@ -10,6 +10,7 @@ import smtplib
 import ssl
 import sys
 import urllib.request
+import urllib.error
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from pathlib import Path
@@ -21,7 +22,7 @@ CACHE = ROOT / '.cache' / 'preise.json'
 STORE = 'https://bambulab-eu.myshopify.com'
 PRODUCT_URL = 'https://eu.store.bambulab.com'
 ENDPOINTS = ('/collections/3d-printer/products.json', '/products.json')
-HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; bambu-price-monitor/1.3.1)', 'Accept': 'application/json', 'Accept-Language': 'de-DE,de;q=0.9'}
+HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; bambu-price-monitor/1.3.2)', 'Accept': 'application/json', 'Accept-Language': 'de-DE,de;q=0.9'}
 
 
 def cents(value):
@@ -91,14 +92,19 @@ def official_offers(errors, diagnostics):
             try:
                 data, final_url = get_json(url)
                 offers = parse_shopify(data, final_url)
+                candidates = [str(p.get('title') or '') for p in data['products']
+                              if isinstance(p, dict) and re.search(r'h2s|laser', str(p.get('title') or ''), re.I)]
                 diagnostics.append({'source': final_url, 'product_count': len(data['products']),
-                                    'matching_offers': len(offers),
+                                    'matching_offers': len(offers), 'candidate_count': len(candidates),
+                                    'candidate_titles': candidates[:30],
                                     'sample_titles': [str(p.get('title')) for p in data['products'][:15] if isinstance(p, dict)]})
                 found.extend(offers)
                 if len(data['products']) < 250:
                     break
             except (OSError, ValueError, KeyError, TypeError) as exc:
-                errors.append(f'{url}: {type(exc).__name__}: {str(exc)[:160]}')
+                detail = f'HTTP {exc.code}' if isinstance(exc, urllib.error.HTTPError) else f'{type(exc).__name__}: {str(exc)[:160]}'
+                errors.append(f'{url}: {detail}')
+                diagnostics.append({'source': url, 'error': detail})
                 break
         if found:
             return found
@@ -203,7 +209,7 @@ def main():
     rows.sort(key=lambda r: (r['total_cents'] is None, r['total_cents'] if r['total_cents'] is not None else r['price_cents']))
     attach_changes(rows, previous_prices())
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / 'preise.json').write_text(json.dumps({'version': VERSION, 'checked_at': now.isoformat(),
+    (OUT / f'preise_v{VERSION}.json').write_text(json.dumps({'version': VERSION, 'checked_at': now.isoformat(),
         'target': 'Bambu Lab H2S Laser Full Combo 10W', 'offers': rows,
         'errors': errors, 'diagnostics': diagnostics}, ensure_ascii=False, indent=2), encoding='utf-8')
     table = []
@@ -226,9 +232,13 @@ def main():
         report += '<p><strong>Keine verlässlich identifizierten Angebote.</strong></p>'
     if errors:
         report += '<p>Hinweise: ' + html.escape('; '.join(errors[:8])) + '</p>'
-    (OUT / 'bericht.html').write_text('<!doctype html><html lang="de"><meta charset="utf-8"><body>' + report + '</body></html>', encoding='utf-8')
+    (OUT / f'bericht_v{VERSION}.html').write_text('<!doctype html><html lang="de"><meta charset="utf-8"><body>' + report + '</body></html>', encoding='utf-8')
     if not rows:
         print('FEHLER: Keine H2S Laser Full Combo 10W Angebote erkannt')
+        for entry in diagnostics:
+            print('DIAGNOSE: ' + json.dumps(entry, ensure_ascii=False)[:900])
+        for error in errors:
+            print('ABRUF-FEHLER: ' + error[:250])
         return 1
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     CACHE.write_text(json.dumps({r['id']: {'total_cents': r['total_cents'], 'price_cents': r['price_cents']}
