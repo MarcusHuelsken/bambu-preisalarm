@@ -30,6 +30,21 @@ jobs:
         env:
           KEY_PRESENT: ${{ secrets.OPENAI_API_KEY != '' }}
         run: test "$KEY_PRESENT" = 'true'
+      - name: Capture retailer HTML for offline Codex diagnosis
+        run: |
+          python - <<'PY'
+          import preischeck as p
+          from pathlib import Path
+          root = Path('.cache/retailer-pages')
+          root.mkdir(parents=True, exist_ok=True)
+          for index, source in enumerate(p.SOURCES):
+              try:
+                  page = p.fetch_page(source['url'])
+                  (root / f'source-{index}.html').write_text(page, encoding='utf-8')
+                  print(f'Saved {source["merchant"]}: {len(page)} chars')
+              except (OSError, ValueError) as exc:
+                  print(f'Could not capture {source["merchant"]}: {type(exc).__name__}')
+          PY
       - name: Initial verification
         id: initial
         continue-on-error: true
@@ -39,13 +54,15 @@ jobs:
           python .github/scripts/verify_live.py
       - name: Codex repair attempt 1
         if: ${{ steps.initial.outcome == 'failure' }}
+        continue-on-error: true
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ':workspace'
           prompt: |
             Fix the Bambu H2S Laser Full Combo 10W live retailer price monitor.
-            Current live check failed. Inspect output/preise.json, pricecheck source
+            Current live check failed. Inspect output/preise.json, cached HTML
+            under .cache/retailer-pages/ (network access is restricted), and source
             (preischeck.py) and offline tests. Only edit preischeck.py and
             test_preischeck.py. Never edit workflow, verifier or offers.json.
             Do not fabricate prices, VAT, shipping or evidence. Do not weaken tests.
@@ -64,13 +81,15 @@ jobs:
           python .github/scripts/verify_live.py
       - name: Codex repair attempt 2
         if: ${{ steps.initial.outcome == 'failure' && steps.check1.outcome == 'failure' }}
+        continue-on-error: true
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ':workspace'
           prompt: |
             Fix the Bambu H2S Laser Full Combo 10W live retailer price monitor.
-            Current live check failed. Inspect output/preise.json, pricecheck source
+            Current live check failed. Inspect output/preise.json, cached HTML
+            under .cache/retailer-pages/ (network access is restricted), and source
             (preischeck.py) and offline tests. Only edit preischeck.py and
             test_preischeck.py. Never edit workflow, verifier or offers.json.
             Do not fabricate prices, VAT, shipping or evidence. Do not weaken tests.
@@ -89,13 +108,15 @@ jobs:
           python .github/scripts/verify_live.py
       - name: Codex repair attempt 3
         if: ${{ steps.initial.outcome == 'failure' && steps.check2.outcome == 'failure' }}
+        continue-on-error: true
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ':workspace'
           prompt: |
             Fix the Bambu H2S Laser Full Combo 10W live retailer price monitor.
-            Current live check failed. Inspect output/preise.json, pricecheck source
+            Current live check failed. Inspect output/preise.json, cached HTML
+            under .cache/retailer-pages/ (network access is restricted), and source
             (preischeck.py) and offline tests. Only edit preischeck.py and
             test_preischeck.py. Never edit workflow, verifier or offers.json.
             Do not fabricate prices, VAT, shipping or evidence. Do not weaken tests.
