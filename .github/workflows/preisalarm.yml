@@ -1,14 +1,11 @@
-name: Bambu H2S Laser 10W Preisalarm
-
+name: Bambu H2S Laser 10W Preisalarm v1.3.2
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * *'
     - cron: '0 7 * * *'
-
 permissions:
   contents: read
-
 jobs:
   preise:
     runs-on: ubuntu-latest
@@ -42,8 +39,8 @@ jobs:
       - name: Syntax und Tests
         if: steps.local_time.outputs.run_check == 'true'
         run: |
-          python -m py_compile preischeck.py
-          python -m unittest discover -p 'test_*.py'
+          python -m py_compile preischeck.py test_preischeck.py
+          python -m unittest discover -p 'test_*.py' -v
       - name: Preise pruefen und E-Mail senden
         if: steps.local_time.outputs.run_check == 'true'
         env:
@@ -64,7 +61,7 @@ jobs:
         if: always() && steps.local_time.outputs.run_check == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: h2s-laser-preisbericht
+          name: h2s-laser-preisbericht_v1.3.2
           path: output/
           if-no-files-found: warn
           retention-days: 30
