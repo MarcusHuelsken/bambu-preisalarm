@@ -16,6 +16,8 @@ jobs:
     if: ${{ vars.ENABLE_CODEX_AUTOREPAIR == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      patch_ready: ${{ steps.scope.outputs.patch_ready }}
     permissions:
       contents: read
     steps:
@@ -49,6 +51,7 @@ jobs:
         id: initial
         continue-on-error: true
         run: |
+          set -e
           python -m unittest discover -p 'test_*.py' -v
           python preischeck.py
           python .github/scripts/verify_live.py
@@ -75,6 +78,7 @@ jobs:
         if: ${{ steps.initial.outcome == 'failure' }}
         continue-on-error: true
         run: |
+          set -e
           python -m py_compile preischeck.py test_preischeck.py
           python -m unittest discover -p 'test_*.py' -v
           python preischeck.py
@@ -102,6 +106,7 @@ jobs:
         if: ${{ steps.initial.outcome == 'failure' && steps.check1.outcome == 'failure' }}
         continue-on-error: true
         run: |
+          set -e
           python -m py_compile preischeck.py test_preischeck.py
           python -m unittest discover -p 'test_*.py' -v
           python preischeck.py
@@ -129,6 +134,7 @@ jobs:
         if: ${{ steps.initial.outcome == 'failure' && steps.check2.outcome == 'failure' }}
         continue-on-error: true
         run: |
+          set -e
           python -m py_compile preischeck.py test_preischeck.py
           python -m unittest discover -p 'test_*.py' -v
           python preischeck.py
@@ -148,6 +154,7 @@ jobs:
           assert not untracked, f'Unauthorized new files: {untracked}'
           assert changed, 'No code change to publish'
           PY
+          echo 'patch_ready=true' >> "$GITHUB_OUTPUT"
       - name: Export patch
         if: ${{ steps.scope.outcome == 'success' }}
         run: git diff --binary -- preischeck.py test_preischeck.py > repair.patch
@@ -161,7 +168,7 @@ jobs:
 
   publish:
     needs: repair
-    if: ${{ needs.repair.result == 'success' }}
+    if: ${{ needs.repair.result == 'success' && needs.repair.outputs.patch_ready == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -185,6 +192,7 @@ jobs:
           git apply repair.patch
       - name: Independent final verification
         run: |
+          set -e
           python -m py_compile preischeck.py test_preischeck.py
           python -m unittest discover -p 'test_*.py' -v
           python preischeck.py
