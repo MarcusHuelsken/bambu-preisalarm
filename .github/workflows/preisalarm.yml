@@ -1,4 +1,5 @@
-name: Bambu H2S Laser 10W Preisalarm v1.3.2
+# Bambu Preisalarm version 1.3.3
+name: Bambu H2S Laser 10W Preisalarm
 on:
   workflow_dispatch:
   schedule:
@@ -11,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Ortszeit pruefen
+      - name: Ortszeit prüfen
         id: local_time
         shell: bash
         run: |
@@ -20,28 +21,25 @@ jobs:
           else
             echo 'run_check=false' >> "$GITHUB_OUTPUT"
           fi
-      - name: Repository laden
+      - uses: actions/checkout@v4
         if: steps.local_time.outputs.run_check == 'true'
-        uses: actions/checkout@v4
-      - name: Python einrichten
+      - uses: actions/setup-python@v5
         if: steps.local_time.outputs.run_check == 'true'
-        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Preisverlauf wiederherstellen
+      - name: Restore history
         if: steps.local_time.outputs.run_check == 'true'
         uses: actions/cache/restore@v4
         with:
           path: .cache/preise.json
           key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            h2s-laser-
+          restore-keys: h2s-laser-
       - name: Syntax und Tests
         if: steps.local_time.outputs.run_check == 'true'
         run: |
           python -m py_compile preischeck.py test_preischeck.py
           python -m unittest discover -p 'test_*.py' -v
-      - name: Preise pruefen und E-Mail senden
+      - name: Preise prüfen und E-Mail senden
         if: steps.local_time.outputs.run_check == 'true'
         env:
           SMTP_HOST: smtp.1und1.de
@@ -51,7 +49,7 @@ jobs:
           MAIL_FROM: marcus.huelsken@online.de
           MAIL_TO: marcus.huelsken@online.de,sarah.huelsken@online.de
         run: python preischeck.py
-      - name: Preisverlauf speichern
+      - name: Save history
         if: success() && steps.local_time.outputs.run_check == 'true'
         uses: actions/cache/save@v4
         with:
@@ -61,7 +59,7 @@ jobs:
         if: always() && steps.local_time.outputs.run_check == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: h2s-laser-preisbericht_v1.3.2
+          name: h2s-laser-preisbericht
           path: output/
           if-no-files-found: warn
           retention-days: 30
