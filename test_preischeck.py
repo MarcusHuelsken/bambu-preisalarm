@@ -1,4 +1,4 @@
-"""Offline tests for Bambu Preisalarm version 1.3.4."""
+"""Offline tests for Bambu Preisalarm version 1.3.5."""
 import unittest
 import datetime as dt
 import json
@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 import preischeck as p
+import price_charts
 
 
 class Tests(unittest.TestCase):
@@ -29,6 +30,34 @@ class Tests(unittest.TestCase):
                 errors = []
                 self.assertEqual(p.extra_offers(today, errors), [])
                 self.assertTrue(errors)
+
+    def test_conrad_source_exact_model_and_tax_guard(self):
+        sources = [s for s in p.SOURCES if s['merchant'] == 'Conrad']
+        self.assertEqual(len(sources), 1)
+        self.assertIn('3466450.html', sources[0]['url'])
+        self.assertEqual(sources[0]['kind'], 'gross')
+        page = ('<script type="application/ld+json">'
+                '{"@type":"Product","name":"Bambu Lab H2S Laser Full Combo 10 W",'
+                '"offers":{"price":"1759.00","priceCurrency":"EUR"}}'
+                '</script>')
+        offers, notes = p.product_offers(page, sources[0])
+        self.assertEqual(offers, [])
+        self.assertTrue(notes)
+
+    def test_price_history_and_chart_rendering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'history.json'
+            offer = {'merchant': 'Shop A', 'price_cents': 169900, 'total_cents': 170499}
+            history = price_charts.update_history(path, [offer], '2026-11-19')
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]['total_cents'], 170499)
+            history = price_charts.update_history(path, [offer], '2026-11-19')
+            self.assertEqual(len(history), 1)
+            history = price_charts.update_history(path, [{**offer, 'price_cents': 159900}], '2026-11-20')
+            self.assertEqual(len(history), 2)
+            self.assertIn('<svg', price_charts.chart_svg(history))
+            self.assertTrue(price_charts.chart_png(history).startswith(b'\\x89PNG'))
+            self.assertTrue(price_charts.chart_png(history, 'total_cents').startswith(b'\\x89PNG'))
 
     def test_model(self):
         self.assertTrue(p.target_variant('Bambu Lab H2S Laser Full Combo 10W'))

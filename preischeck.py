@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Bambu H2S Laser Full Combo 10W price monitor, version 1.3.4.
+"""Bambu H2S Laser Full Combo 10W price monitor, version 1.3.5.
 
 Conservative price extraction from exact-model retailer pages and optional
 manually verified offers. No guessing about VAT, shipping or discounts.
 """
-VERSION = '1.3.4'
+VERSION = '1.3.6'
 import datetime as dt
 import html
 import json
@@ -14,6 +14,7 @@ import smtplib
 import ssl
 import sys
 import urllib.request
+import price_charts
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from pathlib import Path
@@ -22,11 +23,12 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / 'output'
 CACHE = ROOT / '.cache' / 'preise.json'
-HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; H2S-price-monitor/1.3.4)', 'Accept-Language': 'de-DE,de;q=0.9'}
+HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; H2S-price-monitor/1.3.5)', 'Accept-Language': 'de-DE,de;q=0.9'}
 SOURCES = [
     {'merchant': 'reichelt elektronik', 'url': 'https://www.reichelt.de/de/de/shop/produkt/3d_drucker_bambu_lab_h2s_laser_full_combo_10_w-412547', 'kind': 'net'},
     {'merchant': 'IGO3D', 'url': 'https://www.igo3d.com/bambu-lab-h2s-laser-full-combo-10-w-en', 'kind': 'variant'},
     {'merchant': 'Polyfab3D', 'url': 'https://www.polyfab3d.de/bambu-lab-3d-drucker/4769-bambu-lab-h2s-laser-full-combo-10w.html', 'kind': 'net'},
+    {'merchant': 'Conrad', 'url': 'https://www.conrad.de/de/p/bambulab-h2s-laser-full-combo-10-w-ams-2-pro-3d-drucker-ki-unterstuetzung-kammerheizung-app-anbindung-integrierte-ka-3466450.html', 'kind': 'gross'},
 ]
 
 
@@ -168,7 +170,7 @@ def money(n):
     return 'unbekannt' if n is None else f'{n / 100:.2f} €'.replace('.', ',')
 
 
-def send_email(markup, stamp):
+def send_email(markup, stamp, chart_image=None, total_chart_image=None):
     keys = ('SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'MAIL_FROM', 'MAIL_TO')
     missing = [key for key in keys if not os.getenv(key)]
     if missing:
@@ -179,6 +181,10 @@ def send_email(markup, stamp):
     msg['Subject'] = f'H2S Laser Full Combo 10W Preisalarm v{VERSION} – {stamp}'
     msg.set_content('HTML-Bericht im Anhang der E-Mail.')
     msg.add_alternative(markup, subtype='html')
+    if chart_image is not None:
+        msg.get_payload()[-1].add_related(chart_image, maintype='image', subtype='png', cid='<pricechart>')
+    if total_chart_image is not None:
+        msg.get_payload()[-1].add_related(total_chart_image, maintype='image', subtype='png', cid='<totalchart>')
     port = int(os.getenv('SMTP_PORT', '465'))
     if port not in (465, 587):
         raise ValueError('SMTP_PORT must be 465 or 587')
@@ -220,6 +226,7 @@ def main():
         else:
             row['change_cents'], row['change_basis'] = None, 'Kein Vergleich'
     OUT.mkdir(exist_ok=True)
+    history = price_charts.update_history(ROOT / '.cache' / 'price-history.json', rows, now.date().isoformat())
     report = {'version': VERSION, 'checked_at': now.isoformat(), 'target': 'Bambu Lab H2S Laser Full Combo 10W',
               'offers': rows, 'errors': errors, 'diagnostics': diagnostics}
     (OUT / 'preise.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -235,6 +242,10 @@ def main():
               '<table border="1"><tr><th>Händler</th><th>Gerätepreis</th><th>Versand</th>'
               '<th>Endpreis</th><th>Vergleichsbasis</th><th>Änderung</th><th>Link</th></tr>'
               + ''.join(trs) + '</table>')
+    if history:
+        markup += '<h3>Verifizierte Gerätepreise im Zeitverlauf</h3>' + price_charts.chart_svg(history)
+        markup += '<h3>Verifizierte Endpreise (nur bei bekannten Versandkosten)</h3>' + price_charts.chart_svg(history, 'total_cents')
+        markup += '<p>Farben entsprechen der Reihenfolge der Händlernamen im Diagramm; historische Werte sind nur tatsächlich beobachtete Preise.</p>'
     if not rows:
         markup += '<p>Keine eindeutig bestätigten Bruttopreise gefunden. Siehe preise.json.</p>'
     (OUT / 'bericht.html').write_text('<!doctype html><html lang="de"><meta charset="utf-8"><body>' + markup + '</body></html>', encoding='utf-8')
@@ -244,7 +255,14 @@ def main():
     CACHE.parent.mkdir(exist_ok=True)
     CACHE.write_text(json.dumps({r['id']: {'price_cents': r['price_cents'], 'total_cents': r['total_cents']} for r in rows}), encoding='utf-8')
     print(f'v{VERSION}: {len(rows)} verifizierte Angebote')
-    send_email(markup, now.strftime('%d.%m.%Y %H:%M'))
+    email_markup = markup
+    email_png = price_charts.chart_png(history)
+    total_png = price_charts.chart_png(history, 'total_cents')
+    if email_png is not None:
+        email_markup = email_markup.replace(price_charts.chart_svg(history), '<img src="cid:pricechart" alt="Preisentwicklung der Händler" width="760">')
+    if total_png is not None:
+        email_markup = email_markup.replace(price_charts.chart_svg(history, 'total_cents'), '<img src="cid:totalchart" alt="Endpreisentwicklung" width="760">')
+    send_email(email_markup, now.strftime('%d.%m.%Y %H:%M'), email_png, total_png)
     return 0
 
 

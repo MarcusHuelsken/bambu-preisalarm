@@ -1,0 +1,61 @@
+name: Live H2S Price Verification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '35 7 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-h2s-price-verification
+  cancel-in-progress: false
+
+jobs:
+  live-prices:
+    name: Verify real 10W gross retailer offer
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore price history
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/price-history.json
+          key: h2s-history-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: h2s-history-
+      - name: Syntax and offline unit tests
+        run: |
+          python -m py_compile preischeck.py test_preischeck.py price_charts.py .github/scripts/verify_live.py
+          python -m unittest discover -p 'test_*.py' -v
+      - name: Check live retailer prices without sending emails
+        env:
+          SMTP_HOST: ''
+          SMTP_USER: ''
+          SMTP_PASSWORD: ''
+          MAIL_FROM: ''
+          MAIL_TO: ''
+        run: |
+          set -e
+          python preischeck.py
+          python .github/scripts/verify_live.py
+      - name: Save observed price history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/price-history.json
+          key: h2s-history-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Upload diagnostics even if no price is verified
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: h2s-live-diagnostics
+          path: output/
+          if-no-files-found: warn
+          retention-days: 14

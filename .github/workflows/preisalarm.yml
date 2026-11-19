@@ -34,10 +34,17 @@ jobs:
           path: .cache/preise.json
           key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: h2s-laser-
+      - name: Restore shared price history
+        if: steps.local_time.outputs.run_check == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/price-history.json
+          key: h2s-history-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: h2s-history-
       - name: Syntax und Tests
         if: steps.local_time.outputs.run_check == 'true'
         run: |
-          python -m py_compile preischeck.py test_preischeck.py
+          python -m py_compile preischeck.py test_preischeck.py price_charts.py
           python -m unittest discover -p 'test_*.py' -v
       - name: Preise prüfen und E-Mail senden
         if: steps.local_time.outputs.run_check == 'true'
@@ -53,8 +60,16 @@ jobs:
         if: success() && steps.local_time.outputs.run_check == 'true'
         uses: actions/cache/save@v4
         with:
-          path: .cache/preise.json
+          path: |
+            .cache/preise.json
+            .cache/price-history.json
           key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Save shared price history
+        if: always() && steps.local_time.outputs.run_check == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/price-history.json
+          key: h2s-history-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Preisbericht speichern
         if: always() && steps.local_time.outputs.run_check == 'true'
         uses: actions/upload-artifact@v4
