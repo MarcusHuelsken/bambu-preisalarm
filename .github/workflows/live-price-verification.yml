@@ -24,9 +24,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Restore price history
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/price-history.json
+          key: h2s-history-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: h2s-history-
       - name: Syntax and offline unit tests
         run: |
-          python -m py_compile preischeck.py test_preischeck.py .github/scripts/verify_live.py
+          python -m py_compile preischeck.py test_preischeck.py price_charts.py .github/scripts/verify_live.py
           python -m unittest discover -p 'test_*.py' -v
       - name: Check live retailer prices without sending emails
         env:
@@ -39,6 +45,12 @@ jobs:
           set -e
           python preischeck.py
           python .github/scripts/verify_live.py
+      - name: Save observed price history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/price-history.json
+          key: h2s-history-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Upload diagnostics even if no price is verified
         if: always()
         uses: actions/upload-artifact@v4
