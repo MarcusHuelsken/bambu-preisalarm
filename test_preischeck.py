@@ -1,9 +1,35 @@
-"""Offline tests for Bambu Preisalarm version 1.3.3."""
+"""Offline tests for Bambu Preisalarm version 1.3.4."""
 import unittest
+import datetime as dt
+import json
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 import preischeck as p
 
 
 class Tests(unittest.TestCase):
+    def test_manual_free_shipping_and_discount_precision(self):
+        today = dt.date(2026, 11, 19)
+        base = {'name': 'Bambu Lab H2S Laser Full Combo 10W', 'merchant': 'test',
+                'link': 'https://example.com/h2s', 'price_eur': '1699.00',
+                'shipping_eur': '0.00', 'discount_eur': '10.00',
+                'vat_included': True, 'verified_on': today.isoformat()}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'offers.json'
+            with patch.object(p, 'ROOT', Path(tmp)):
+                path.write_text(json.dumps([base]), encoding='utf-8')
+                errors = []
+                offers = p.extra_offers(today, errors)
+                self.assertEqual(errors, [])
+                self.assertEqual(offers[0]['shipping_cents'], 0)
+                self.assertEqual(offers[0]['total_cents'], 168900)
+                base['discount_eur'] = '10.999'
+                path.write_text(json.dumps([base]), encoding='utf-8')
+                errors = []
+                self.assertEqual(p.extra_offers(today, errors), [])
+                self.assertTrue(errors)
+
     def test_model(self):
         self.assertTrue(p.target_variant('Bambu Lab H2S Laser Full Combo 10W'))
         for name in ('H2D Laser Full Combo 10W', 'H2S Laser Full Combo 40W', 'H2S Combo', 'H2S Laser Full Combo 10W Upgrade'):
