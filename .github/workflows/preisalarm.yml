@@ -31,13 +31,15 @@ jobs:
         if: steps.local_time.outputs.run_check == 'true'
         uses: actions/cache/restore@v4
         with:
-          path: .cache/preise.json
+          path: |
+            .cache/preise.json
+            .cache/price-history.json
           key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: h2s-laser-
       - name: Syntax und Tests
         if: steps.local_time.outputs.run_check == 'true'
         run: |
-          python -m py_compile preischeck.py test_preischeck.py
+          python -m py_compile preischeck.py test_preischeck.py price_charts.py
           python -m unittest discover -p 'test_*.py' -v
       - name: Preise prüfen und E-Mail senden
         if: steps.local_time.outputs.run_check == 'true'
@@ -53,7 +55,9 @@ jobs:
         if: success() && steps.local_time.outputs.run_check == 'true'
         uses: actions/cache/save@v4
         with:
-          path: .cache/preise.json
+          path: |
+            .cache/preise.json
+            .cache/price-history.json
           key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Preisbericht speichern
         if: always() && steps.local_time.outputs.run_check == 'true'
