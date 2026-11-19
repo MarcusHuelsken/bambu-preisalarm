@@ -55,6 +55,8 @@ jobs:
           python -m unittest discover -p 'test_*.py' -v
           python preischeck.py
           python .github/scripts/verify_live.py
+      # One Codex invocation per job: drop-sudo removes sudo privileges permanently.
+      # A second invocation in the same job fails before Codex can run.
       - name: Codex repair attempt 1
         if: ${{ steps.initial.outcome == 'failure' }}
         continue-on-error: true
@@ -83,65 +85,9 @@ jobs:
           python -m unittest discover -p 'test_*.py' -v
           python preischeck.py
           python .github/scripts/verify_live.py
-      - name: Codex repair attempt 2
-        if: ${{ steps.initial.outcome == 'failure' && steps.check1.outcome == 'failure' }}
-        continue-on-error: true
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          permission-profile: ':workspace'
-          prompt: |
-            Fix the Bambu H2S Laser Full Combo 10W live retailer price monitor.
-            Current live check failed. Inspect output/preise.json, cached HTML
-            under .cache/retailer-pages/ (network access is restricted), and source
-            (preischeck.py) and offline tests. Only edit preischeck.py and
-            test_preischeck.py. Never edit workflow, verifier or offers.json.
-            Do not fabricate prices, VAT, shipping or evidence. Do not weaken tests.
-            Never send emails. Make a minimal, auditable improvement.
-            Check that a real retailer page identifies the exact 10W model and
-            explicitly confirms gross consumer price. If impossible, leave it failing.
-            The goal is an actual verified live offer, not merely a green CI job.
-      - name: Verify repair attempt 2
-        id: check2
-        if: ${{ steps.initial.outcome == 'failure' && steps.check1.outcome == 'failure' }}
-        continue-on-error: true
-        run: |
-          set -e
-          python -m py_compile preischeck.py test_preischeck.py
-          python -m unittest discover -p 'test_*.py' -v
-          python preischeck.py
-          python .github/scripts/verify_live.py
-      - name: Codex repair attempt 3
-        if: ${{ steps.initial.outcome == 'failure' && steps.check2.outcome == 'failure' }}
-        continue-on-error: true
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          permission-profile: ':workspace'
-          prompt: |
-            Fix the Bambu H2S Laser Full Combo 10W live retailer price monitor.
-            Current live check failed. Inspect output/preise.json, cached HTML
-            under .cache/retailer-pages/ (network access is restricted), and source
-            (preischeck.py) and offline tests. Only edit preischeck.py and
-            test_preischeck.py. Never edit workflow, verifier or offers.json.
-            Do not fabricate prices, VAT, shipping or evidence. Do not weaken tests.
-            Never send emails. Make a minimal, auditable improvement.
-            Check that a real retailer page identifies the exact 10W model and
-            explicitly confirms gross consumer price. If impossible, leave it failing.
-            The goal is an actual verified live offer, not merely a green CI job.
-      - name: Verify repair attempt 3
-        id: check3
-        if: ${{ steps.initial.outcome == 'failure' && steps.check2.outcome == 'failure' }}
-        continue-on-error: true
-        run: |
-          set -e
-          python -m py_compile preischeck.py test_preischeck.py
-          python -m unittest discover -p 'test_*.py' -v
-          python preischeck.py
-          python .github/scripts/verify_live.py
       - name: Reject unauthorized file changes
         id: scope
-        if: ${{ steps.initial.outcome == 'success' || steps.check1.outcome == 'success' || steps.check2.outcome == 'success' || steps.check3.outcome == 'success' }}
+        if: ${{ steps.initial.outcome == 'success' || steps.check1.outcome == 'success' }}
         run: |
           python - <<'PY'
           import subprocess
