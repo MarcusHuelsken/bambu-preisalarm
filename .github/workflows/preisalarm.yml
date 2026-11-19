@@ -31,11 +31,16 @@ jobs:
         if: steps.local_time.outputs.run_check == 'true'
         uses: actions/cache/restore@v4
         with:
-          path: |
-            .cache/preise.json
-            .cache/price-history.json
+          path: .cache/preise.json
           key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: h2s-laser-
+      - name: Restore shared price history
+        if: steps.local_time.outputs.run_check == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/price-history.json
+          key: h2s-history-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: h2s-history-
       - name: Syntax und Tests
         if: steps.local_time.outputs.run_check == 'true'
         run: |
@@ -59,6 +64,12 @@ jobs:
             .cache/preise.json
             .cache/price-history.json
           key: h2s-laser-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Save shared price history
+        if: always() && steps.local_time.outputs.run_check == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/price-history.json
+          key: h2s-history-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Preisbericht speichern
         if: always() && steps.local_time.outputs.run_check == 'true'
         uses: actions/upload-artifact@v4
