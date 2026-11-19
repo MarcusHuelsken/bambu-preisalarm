@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Bambu H2S Laser Full Combo 10W price monitor, version 1.3.3.
+"""Bambu H2S Laser Full Combo 10W price monitor, version 1.3.4.
 
 Conservative price extraction from exact-model retailer pages and optional
 manually verified offers. No guessing about VAT, shipping or discounts.
 """
-VERSION = '1.3.3'
+VERSION = '1.3.4'
 import datetime as dt
 import html
 import json
@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / 'output'
 CACHE = ROOT / '.cache' / 'preise.json'
-HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; H2S-price-monitor/1.3.3)', 'Accept-Language': 'de-DE,de;q=0.9'}
+HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; H2S-price-monitor/1.3.4)', 'Accept-Language': 'de-DE,de;q=0.9'}
 SOURCES = [
     {'merchant': 'reichelt elektronik', 'url': 'https://www.reichelt.de/de/de/shop/produkt/3d_drucker_bambu_lab_h2s_laser_full_combo_10_w-412547', 'kind': 'net'},
     {'merchant': 'IGO3D', 'url': 'https://www.igo3d.com/bambu-lab-h2s-laser-full-combo-10-w-en', 'kind': 'variant'},
@@ -139,8 +139,15 @@ def extra_offers(today, errors):
             if not 0 <= (today - date).days <= 2:
                 raise ValueError('Verification too old')
             price = cents(offer['price_eur'])
-            shipping = cents(offer['shipping_eur']) if offer.get('shipping_eur') is not None else None
-            discount = int(Decimal(str(offer.get('discount_eur', 0))) * 100)
+            shipping_raw = offer.get('shipping_eur')
+            shipping = (0 if str(shipping_raw).strip() in ('0', '0.0', '0.00')
+                        else cents(shipping_raw)) if shipping_raw is not None else None
+            if shipping_raw is not None and shipping is None:
+                raise ValueError('Invalid shipping amount')
+            discount_raw = str(offer.get('discount_eur', 0)).strip()
+            if not re.fullmatch(r'\d{1,6}(?:\.\d{1,2})?', discount_raw):
+                raise ValueError('Invalid discount precision')
+            discount = int(Decimal(discount_raw) * 100)
             if price is None or discount < 0 or discount > price or not str(offer['link']).startswith('https://'):
                 raise ValueError('Invalid amounts or URL')
             if offer.get('vat_included') is not True:
