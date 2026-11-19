@@ -56,8 +56,8 @@ class Tests(unittest.TestCase):
             history = price_charts.update_history(path, [{**offer, 'price_cents': 159900}], '2026-11-20')
             self.assertEqual(len(history), 2)
             self.assertIn('<svg', price_charts.chart_svg(history))
-            self.assertTrue(price_charts.chart_png(history).startswith(b'\\x89PNG'))
-            self.assertTrue(price_charts.chart_png(history, 'total_cents').startswith(b'\\x89PNG'))
+            self.assertTrue(price_charts.chart_png(history).startswith(bytes((137, 80, 78, 71))))
+            self.assertTrue(price_charts.chart_png(history, 'total_cents').startswith(bytes((137, 80, 78, 71))))
 
     def test_model(self):
         self.assertTrue(p.target_variant('Bambu Lab H2S Laser Full Combo 10W'))
