@@ -170,7 +170,7 @@ def money(n):
     return 'unbekannt' if n is None else f'{n / 100:.2f} €'.replace('.', ',')
 
 
-def send_email(markup, stamp, chart_image=None):
+def send_email(markup, stamp, chart_image=None, total_chart_image=None):
     keys = ('SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'MAIL_FROM', 'MAIL_TO')
     missing = [key for key in keys if not os.getenv(key)]
     if missing:
@@ -183,6 +183,8 @@ def send_email(markup, stamp, chart_image=None):
     msg.add_alternative(markup, subtype='html')
     if chart_image is not None:
         msg.get_payload()[-1].add_related(chart_image, maintype='image', subtype='png', cid='<pricechart>')
+    if total_chart_image is not None:
+        msg.get_payload()[-1].add_related(total_chart_image, maintype='image', subtype='png', cid='<totalchart>')
     port = int(os.getenv('SMTP_PORT', '465'))
     if port not in (465, 587):
         raise ValueError('SMTP_PORT must be 465 or 587')
@@ -255,10 +257,12 @@ def main():
     print(f'v{VERSION}: {len(rows)} verifizierte Angebote')
     email_markup = markup
     email_png = price_charts.chart_png(history)
+    total_png = price_charts.chart_png(history, 'total_cents')
     if email_png is not None:
         email_markup = email_markup.replace(price_charts.chart_svg(history), '<img src="cid:pricechart" alt="Preisentwicklung der Händler" width="760">')
-        email_markup = email_markup.replace(price_charts.chart_svg(history, 'total_cents'), '<p>Endpreisverlauf im HTML-Bericht.</p>')
-    send_email(email_markup, now.strftime('%d.%m.%Y %H:%M'), email_png)
+    if total_png is not None:
+        email_markup = email_markup.replace(price_charts.chart_svg(history, 'total_cents'), '<img src="cid:totalchart" alt="Endpreisentwicklung" width="760">')
+    send_email(email_markup, now.strftime('%d.%m.%Y %H:%M'), email_png, total_png)
     return 0
 
 
