@@ -4,7 +4,7 @@ import datetime as dt
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import preischeck as p
 import price_charts
 
@@ -58,6 +58,22 @@ class Tests(unittest.TestCase):
             self.assertIn('<svg', price_charts.chart_svg(history))
             self.assertTrue(price_charts.chart_png(history).startswith(bytes((137, 80, 78, 71))))
             self.assertTrue(price_charts.chart_png(history, 'total_cents').startswith(bytes((137, 80, 78, 71))))
+
+    def test_email_contains_both_inline_price_charts(self):
+        png = price_charts.chart_png([{'date': '2026-11-19', 'merchant': 'Shop A',
+                                       'price_cents': 169900, 'total_cents': 170499}])
+        env = {'SMTP_HOST': 'smtp.example.com', 'SMTP_USER': 'test',
+               'SMTP_PASSWORD': 'fake-test-password', 'MAIL_FROM': 'a@example.com',
+               'MAIL_TO': 'b@example.com', 'SMTP_PORT': '465'}
+        with patch.dict('os.environ', env), patch.object(p.smtplib, 'SMTP_SSL') as smtp:
+            connection = smtp.return_value.__enter__.return_value
+            p.send_email('<img src="cid:pricechart"><img src="cid:totalchart">',
+                         '19.11.2026', png, png)
+            msg = connection.send_message.call_args.args[0]
+            related = [part for part in msg.walk() if part.get_content_type() == 'image/png']
+            self.assertEqual(len(related), 2)
+            self.assertEqual({part['Content-ID'] for part in related},
+                             {'<pricechart>', '<totalchart>'})
 
     def test_model(self):
         self.assertTrue(p.target_variant('Bambu Lab H2S Laser Full Combo 10W'))
