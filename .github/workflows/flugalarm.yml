@@ -1,0 +1,77 @@
+name: Thailand Flugpreis-Alarm
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 6 * * *'
+    - cron: '15 7 * * *'
+  pull_request:
+    paths:
+      - 'flugalarm.py'
+      - 'flugalarm_config.json'
+      - 'kriterien.html'
+      - 'tests/test_flugalarm.py'
+      - '.github/workflows/flugalarm.yml'
+permissions:
+  contents: read
+concurrency:
+  group: thailand-flight-alert
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -p 'test_flugalarm.py' -v
+  check:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Berlin time guard
+        id: local_time
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == 'workflow_dispatch' ]] || [[ "$(TZ=Europe/Berlin date +%H)" == '08' ]]; then
+            echo 'run_check=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run_check=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.local_time.outputs.run_check == 'true'
+      - uses: actions/setup-python@v5
+        if: steps.local_time.outputs.run_check == 'true'
+        with:
+          python-version: '3.12'
+      - uses: actions/cache/restore@v4
+        if: steps.local_time.outputs.run_check == 'true'
+        with:
+          path: .cache/flight_alert_history.json
+          key: thailand-flight-history-${{ github.run_id }}
+          restore-keys: thailand-flight-history-
+      - name: Suche und E-Mail
+        if: steps.local_time.outputs.run_check == 'true'
+        env:
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          SMTP_HOST: smtp.1und1.de
+          SMTP_PORT: '465'
+          SMTP_USER: 'marcus.huelsken@online.de'
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_FROM: 'marcus.huelsken@online.de'
+          FLIGHT_MAIL_TO: ${{ secrets.FLIGHT_MAIL_TO }}
+        run: python flugalarm.py
+      - uses: actions/cache/save@v4
+        if: always() && steps.local_time.outputs.run_check == 'true'
+        with:
+          path: .cache/flight_alert_history.json
+          key: thailand-flight-history-${{ github.run_id }}
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.local_time.outputs.run_check == 'true'
+        with:
+          name: thailand-flugbericht
+          path: output/fluege/
+          retention-days: 30
+          if-no-files-found: warn

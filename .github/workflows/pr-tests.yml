@@ -3,10 +3,6 @@ name: Python PR Tests
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'preischeck.py'
-      - 'test_preischeck.py'
-      - '.github/workflows/pr-tests.yml'
   workflow_dispatch:
 
 permissions:
@@ -25,6 +21,8 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check Python syntax
-        run: python -m py_compile preischeck.py test_preischeck.py
+        run: python -m py_compile preischeck.py test_preischeck.py flugalarm.py tests/test_flugalarm.py
       - name: Run offline unit tests
         run: python -m unittest discover -p 'test_*.py' -v
+      - name: Run Thailand flight alert tests
+        run: python -m unittest discover -s tests -p 'test_flugalarm.py' -v
