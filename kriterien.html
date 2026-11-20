@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Thailand 2027 · Flugpreis-Kriterien</title>
+<style>
+:root{font-family:system-ui,Segoe UI,Arial,sans-serif;color:#142b38;background:#f2f6f8}
+*{box-sizing:border-box}body{margin:0}main{max-width:960px;margin:0 auto;padding:24px}
+h1{font-size:clamp(1.6rem,4vw,2.3rem);margin:0 0 8px}
+p{color:#49616b;line-height:1.5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.panel{background:#fff;border:1px solid #d9e5e8;border-radius:14px;padding:18px;margin:16px 0;box-shadow:0 2px 6px #102b3210}
+label{display:block;font-weight:600;margin:12px 0 6px}
+input[type=range]{width:100%;accent-color:#1369a0}
+input[type=date],input[type=number]{width:100%;padding:11px;border:1px solid #a8c0c8;border-radius:8px;font:inherit;min-width:0}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:center}
+button{border:0;padding:13px 19px;border-radius:9px;background:#12669f;color:white;font:inherit;font-weight:650;cursor:pointer}
+button:hover{background:#074e7c}.secondary{background:#e7f0f5;color:#17435b}
+.badge{padding:8px 12px;background:#e7f4eb;color:#226333;border-radius:8px;font-weight:700}
+fieldset{border:1px solid #d9e5e8;border-radius:9px}legend{font-weight:700}
+.checks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.checks label{font-weight:500;margin:5px 0}.check{width:18px;height:18px}
+.note{font-size:.9rem}#msg{min-height:22px;color:#8c340e}
+@media(max-width:420px){main{padding:13px}.panel{padding:14px}}
+</style></head><body><main>
+<header><h1>✈️ Thailand 2027 · Flugpreisalarm</h1>
+<p>Familienreise: 2 Erwachsene und 2 Kinder · Bangkok · flexible Daten und gewichtete Kriterien. Die HTML-Datei funktioniert offline; die Suchanfragen laufen nach Installation über GitHub Actions.</p></header>
+<div class="panel"><div class="row"><h2>Gewichtung</h2><output id="total" class="badge">100 Punkte</output></div>
+<p>Die Prozentanteile werden für den Score normalisiert. So darfst du einzelne Kriterien erhöhen, ohne andere zwangsläufig zu reduzieren.</p>
+<div id="weights" class="grid"></div></div>
+<div class="grid">
+<div class="panel"><h2>Reisedaten</h2>
+<label for="dep_start">Hinflug frühestens</label><input id="dep_start" type="date" value="2027-08-06">
+<label for="dep_end">Hinflug spätestens</label><input id="dep_end" type="date" value="2027-08-14">
+<label for="preferred">Wunschtermin</label><input id="preferred" type="date" value="2027-08-10">
+<label for="min_days">Reisetage (Minimum)</label><input id="min_days" type="number" min="2" max="60" value="16">
+<label for="max_days">Reisetage (Maximum)</label><input id="max_days" type="number" min="2" max="60" value="18">
+</div>
+<div class="panel"><h2>Flughäfen</h2>
+<fieldset><legend>Abflug</legend><div class="checks">
+<label><input type="checkbox" class="check" data-airport="DUS" checked> Düsseldorf (DUS)</label>
+<label><input type="checkbox" class="check" data-airport="FRA" checked> Frankfurt (FRA)</label>
+<label><input type="checkbox" class="check" data-airport="CGN" checked> Köln/Bonn (CGN)</label>
+<label><input type="checkbox" class="check" data-airport="AMS" checked> Amsterdam (AMS)</label>
+</div></fieldset>
+<label for="maximum">Maximale Flugzeit je Richtung (Stunden)</label><input id="maximum" type="number" min="11" max="48" value="22">
+<label for="budget">Sehr guter Flugpreis für 4 (€)</label><input id="budget" type="number" min="500" max="15000" value="2800">
+<label for="watch">Alternatives Angebot bis (€)</label><input id="watch" type="number" min="500" max="15000" value="3300">
+<p class="note">Gepäck und Sitzplätze müssen beim finalen Angebot geprüft werden. 190 € Sitzplatzreserve werden für die Bewertung angenommen.</p>
+</div></div>
+<div class="panel"><h2>Konfiguration für GitHub</h2>
+<p>Mit <strong>JSON herunterladen</strong> erzeugst du die Datei <code>flugalarm_config.json</code>. Lade sie in den gleichnamigen Pfad deines Repositories hoch. Das lokale Bearbeiten allein aktualisiert GitHub nicht.</p>
+<div class="row" style="flex-wrap:wrap"><button id="save">⬇ JSON herunterladen</button><button id="reset" class="secondary">Zurücksetzen</button></div>
+<p id="msg" role="status" aria-live="polite"></p>
+</div></main>
+<script>
+(()=>{"use strict";
+const labels={price:"Preis",travel_duration:"Reisedauer",ground_access:"Anfahrt",comfort:"Komfort",travel_date:"Reisedatum"};
+const defaults={price:40,travel_duration:20,ground_access:10,comfort:15,travel_date:15};
+const airportDefaults={DUS:[45,70],FRA:[135,150],CGN:[60,90],AMS:[160,190]};
+const weights=document.getElementById("weights"),total=document.getElementById("total"),msg=document.getElementById("msg");
+function makeSliders(){weights.innerHTML="";for(const [key,title] of Object.entries(labels)){
+const wrap=document.createElement("div"),label=document.createElement("label"),slider=document.createElement("input"),v=document.createElement("output");
+label.htmlFor="w_"+key;label.textContent=title;slider.id="w_"+key;slider.type="range";slider.min="0";slider.max="100";slider.step="5";slider.value=defaults[key];
+slider.dataset.weight=key;v.textContent=slider.value+" %";label.append(" · ",v);wrap.append(label,slider);weights.append(wrap);slider.addEventListener("input",()=>{v.textContent=slider.value+" %";refresh();});
+}refresh();}
+function refresh(){let sum=0;for(const s of weights.querySelectorAll("[data-weight]"))sum+=Number(s.value);total.textContent=sum+" Punkte (normiert)";msg.textContent="";}
+function number(id,min,max){const val=Number(document.getElementById(id).value);return Number.isFinite(val)?Math.max(min,Math.min(max,Math.trunc(val))):min;}
+function date(id){return document.getElementById(id).value;}
+function download(){msg.textContent="";if(!date("dep_start")||!date("dep_end")||!date("preferred")||date("dep_start")>date("dep_end")||date("preferred")<date("dep_start")||date("preferred")>date("dep_end")){msg.textContent="Bitte gültige, aufsteigend sortierte Reisedaten wählen.";return;}
+const min=number("min_days",2,60),max=number("max_days",2,60);if(min>max){msg.textContent="Das Minimum muss kleiner oder gleich dem Maximum sein.";return;}
+const w={};for(const s of weights.querySelectorAll("[data-weight]"))w[s.dataset.weight]=Number(s.value);
+if(!Object.values(w).some(v=>v>0)){msg.textContent="Mindestens ein Kriterium braucht ein Gewicht größer Null.";return;}
+const airports={};for(const [id,[minutes,cost]] of Object.entries(airportDefaults)){
+airports[id]={enabled:document.querySelector('[data-airport="'+id+'"]').checked,ground_minutes:minutes,ground_cost_eur:cost};}
+if(!Object.values(airports).some(o=>o.enabled)){msg.textContent="Mindestens einen Flughafen wählen.";return;}
+const great=number("budget",500,15000),watch=number("watch",500,15000);
+if(great>watch){msg.textContent="Das alternative Budget muss größer oder gleich dem Zielpreis sein.";return;}
+const config={trip:{destination:"BKK",departure_start:date("dep_start"),departure_end:date("dep_end"),preferred_departure:date("preferred"),min_calendar_days:min,max_calendar_days:max,adults:2,children:2,max_stops_per_direction:1,max_hours_per_direction:number("maximum",11,48),max_queries_per_run:4},airports,weights:w,alerts:{great_price_eur:great,watch_price_eur:watch,great_score_min:65,watch_score_min:82,only_new_or_improved:true},comfort:{assumed_seat_reservation_eur:190,assumed_baggage_eur:0,penalty_baggage_unknown:16,penalty_seats_not_guaranteed:14}};
+const blob=new Blob([JSON.stringify(config,null,2)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="flugalarm_config.json";document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);msg.textContent="Konfiguration heruntergeladen. Jetzt im Repository hochladen.";
+}
+document.getElementById("save").addEventListener("click",download);
+document.getElementById("reset").addEventListener("click",()=>{for(const [id,checked] of Object.entries({DUS:true,FRA:true,CGN:true,AMS:true}))document.querySelector('[data-airport="'+id+'"]').checked=checked;
+const v={dep_start:"2027-08-06",dep_end:"2027-08-14",preferred:"2027-08-10",min_days:16,max_days:18,maximum:22,budget:2800,watch:3300};
+for(const [id,value] of Object.entries(v))document.getElementById(id).value=value;makeSliders();});
+makeSliders();
+})();
+</script></body></html>
