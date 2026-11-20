@@ -1,0 +1,57 @@
+{
+  "trip": {
+    "destination": "BKK",
+    "departure_start": "2027-08-06",
+    "departure_end": "2027-08-14",
+    "preferred_departure": "2027-08-10",
+    "min_calendar_days": 16,
+    "max_calendar_days": 18,
+    "adults": 2,
+    "children": 2,
+    "max_stops_per_direction": 1,
+    "max_hours_per_direction": 22,
+    "max_queries_per_run": 4
+  },
+  "airports": {
+    "DUS": {
+      "enabled": true,
+      "ground_minutes": 45,
+      "ground_cost_eur": 70
+    },
+    "FRA": {
+      "enabled": true,
+      "ground_minutes": 135,
+      "ground_cost_eur": 150
+    },
+    "CGN": {
+      "enabled": true,
+      "ground_minutes": 60,
+      "ground_cost_eur": 90
+    },
+    "AMS": {
+      "enabled": true,
+      "ground_minutes": 160,
+      "ground_cost_eur": 190
+    }
+  },
+  "weights": {
+    "price": 40,
+    "travel_duration": 20,
+    "ground_access": 10,
+    "comfort": 15,
+    "travel_date": 15
+  },
+  "alerts": {
+    "great_price_eur": 2800,
+    "watch_price_eur": 3300,
+    "great_score_min": 65,
+    "watch_score_min": 82,
+    "only_new_or_improved": true
+  },
+  "comfort": {
+    "assumed_seat_reservation_eur": 190,
+    "assumed_baggage_eur": 0,
+    "penalty_baggage_unknown": 16,
+    "penalty_seats_not_guaranteed": 14
+  }
+}
