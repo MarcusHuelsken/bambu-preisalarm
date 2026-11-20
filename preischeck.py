@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Bambu H2S Laser Full Combo 10W price monitor, version 1.3.5.
+"""Bambu H2S Laser Full Combo 10W price monitor, version 1.3.7.
 
 Conservative price extraction from exact-model retailer pages and optional
 manually verified offers. No guessing about VAT, shipping or discounts.
 """
-VERSION = '1.3.6'
+VERSION = '1.3.7'
 import datetime as dt
 import html
 import json
@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / 'output'
 CACHE = ROOT / '.cache' / 'preise.json'
-HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; H2S-price-monitor/1.3.5)', 'Accept-Language': 'de-DE,de;q=0.9'}
+HEADERS = {'User-Agent': 'Mozilla/5.0 (compatible; H2S-price-monitor/1.3.7)', 'Accept-Language': 'de-DE,de;q=0.9'}
 SOURCES = [
     {'merchant': 'reichelt elektronik', 'url': 'https://www.reichelt.de/de/de/shop/produkt/3d_drucker_bambu_lab_h2s_laser_full_combo_10_w-412547', 'kind': 'net'},
     {'merchant': 'IGO3D', 'url': 'https://www.igo3d.com/bambu-lab-h2s-laser-full-combo-10-w-en', 'kind': 'variant'},
