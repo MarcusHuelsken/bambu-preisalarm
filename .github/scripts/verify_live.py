@@ -8,7 +8,7 @@ offers = report.get("offers", [])
 assert isinstance(offers, list) and offers, "No offers"
 assert any(
     o.get("source") == "Live JSON-LD"
-    and o.get("merchant") in {"reichelt elektronik", "IGO3D", "Polyfab3D"}
+    and o.get("merchant") in {"reichelt elektronik", "IGO3D", "Polyfab3D", "Conrad"}
     and isinstance(o.get("price_cents"), int)
     and 50000 <= o["price_cents"] <= 2000000
     and o.get("link", "").startswith("https://")
