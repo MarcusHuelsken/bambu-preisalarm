@@ -81,10 +81,15 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          python -m py_compile preischeck.py test_preischeck.py
+          python -m py_compile preischeck.py test_preischeck.py price_charts.py .github/scripts/verify_live.py
           python -m unittest discover -p 'test_*.py' -v
           python preischeck.py
           python .github/scripts/verify_live.py
+      - name: Fail clearly when live verification remains unsuccessful
+        if: ${{ steps.initial.outcome == 'failure' && steps.check1.outcome != 'success' }}
+        run: |
+          echo 'ERROR: No independently verified live EUR gross price. Codex may have failed (e.g. quota exceeded); inspect earlier logs.' >&2
+          exit 1
       - name: Reject unauthorized file changes
         id: scope
         if: ${{ steps.initial.outcome == 'success' || steps.check1.outcome == 'success' }}
