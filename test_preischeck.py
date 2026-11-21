@@ -2,6 +2,7 @@
 import unittest
 import datetime as dt
 import json
+import importlib.util
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -58,6 +59,21 @@ class Tests(unittest.TestCase):
             self.assertIn('<svg', price_charts.chart_svg(history))
             self.assertTrue(price_charts.chart_png(history).startswith(bytes((137, 80, 78, 71))))
             self.assertTrue(price_charts.chart_png(history, 'total_cents').startswith(bytes((137, 80, 78, 71))))
+
+    def test_live_verifier_accepts_conrad_and_rejects_synthetic_prices(self):
+        path = Path(__file__).parent / '.github' / 'scripts' / 'verify_live.py'
+        spec = importlib.util.spec_from_file_location('h2s_verify_live', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        valid = {'source': 'Live JSON-LD', 'merchant': 'Conrad',
+                 'price_cents': 159900, 'name': 'Bambu Lab H2S Laser Full Combo 10W',
+                 'link': 'https://www.conrad.de/example',
+                 'price_basis': 'Bruttopreis; Versand unbekannt'}
+        self.assertEqual(module.verified_live_offers({'offers': [valid]}), [valid])
+        self.assertEqual(module.verified_live_offers({'offers': [{**valid, 'source': 'Manual verification'}]}), [])
+        self.assertEqual(module.verified_live_offers({'offers': [{**valid, 'name': 'H2S Laser Full Combo 40W'}]}), [])
+        self.assertEqual(module.verified_live_offers({'offers': [{**valid, 'price_cents': True}]}), [])
+        self.assertEqual(module.verified_live_offers({'offers': [{**valid, 'price_basis': 'Nettopreis'}]}), [])
 
     def test_model(self):
         self.assertTrue(p.target_variant('Bambu Lab H2S Laser Full Combo 10W'))
