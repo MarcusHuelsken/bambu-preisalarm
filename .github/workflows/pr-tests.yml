@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check Python syntax
-        run: python -m py_compile preischeck.py test_preischeck.py flugalarm.py tests/test_flugalarm.py
+        run: python -m py_compile preischeck.py price_charts.py .github/scripts/verify_live.py test_preischeck.py flugalarm.py tests/test_flugalarm.py
       - name: Run offline unit tests
         run: python -m unittest discover -p 'test_*.py' -v
       - name: Run Thailand flight alert tests
