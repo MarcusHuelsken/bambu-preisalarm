@@ -32,7 +32,7 @@ jobs:
           restore-keys: h2s-history-
       - name: Syntax and offline unit tests
         run: |
-          python -m py_compile preischeck.py test_preischeck.py price_charts.py .github/scripts/verify_live.py
+          python -m py_compile preischeck.py test_preischeck.py price_charts.py .github/scripts/verify_live.py price_failure_report_v1_0_0.py
           python -m unittest discover -p 'test_*.py' -v
       - name: Check live retailer prices without sending emails
         env:
@@ -45,6 +45,9 @@ jobs:
           set -e
           python preischeck.py
           python .github/scripts/verify_live.py
+      - name: Print retailer diagnostics even when price check fails
+        if: always()
+        run: python price_failure_report_v1_0_0.py
       - name: Save observed price history
         if: always()
         uses: actions/cache/save@v4
